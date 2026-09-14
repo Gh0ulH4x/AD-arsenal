@@ -11,6 +11,10 @@ Built for authorized penetration testing, red team engagements, and AD security 
 
 > ⚠️ **For authorized security testing and education only.** Do not use against systems you don't have explicit written permission to test.
 
+### 🌐 [ad-arsenal.gh0ulh4x.workers.dev](https://ad-arsenal.gh0ulh4x.workers.dev/)
+
+No install needed — the live site is always up to date with `main`.
+
 ---
 
 ## Why this exists
@@ -29,19 +33,6 @@ Most AD attack cheat-sheets are static wiki pages: you copy a command, then hand
 - **Global search** — one search box across commands, attack paths, chains, learnbook, and CVEs at once.
 - **Every tool links to its real GitHub repo** — click the tool name on any command to verify you're running the genuine, community-audited source.
 - **Light/dark theme**, keyboard-friendly, and works fully offline once built — no backend, no telemetry, no external calls at runtime.
-
-## Getting started
-
-Requires [Node.js](https://nodejs.org/) 18+.
-
-```bash
-git clone https://github.com/Gh0ulH4x/AD-arsenal.git
-cd AD-arsenal
-npm install
-npm run dev
-```
-
-Opens at `http://localhost:5173`. `npm run build` produces a static `dist/` bundle you can host anywhere (or open directly as a file).
 
 ## Project structure
 
@@ -67,6 +58,21 @@ The whole app intentionally lives in one file — `App.jsx` — rather than bein
 - [Tailwind CSS](https://tailwindcss.com/)
 - [lucide-react](https://lucide.dev/) for icons
 - No backend, no database, no build-time network calls — everything is static data shipped in the bundle.
+
+## Running it locally (for contributors)
+
+The live site above is the fastest way to *use* AD Arsenal — this is only needed if you're contributing:
+
+Requires [Node.js](https://nodejs.org/) 18+.
+
+```bash
+git clone https://github.com/Gh0ulH4x/AD-arsenal.git
+cd AD-arsenal
+npm install
+npm run dev
+```
+
+Opens at `http://localhost:5173`. `npm run build` produces a static `dist/` bundle.
 
 ## Contributing
 
