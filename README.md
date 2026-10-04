@@ -11,7 +11,7 @@ Built for authorized penetration testing, red team engagements, and AD security 
 
 > ⚠️ **For authorized security testing and education only.** Do not use against systems you don't have explicit written permission to test.
 
-### 🌐 [ad-arsenal.gh0ulh4x.workers.dev](https://ad-arsenal.gh0ulh4x.workers.dev/)
+### 🌐 [ad-arsenal.gh0ulh4x.com](https://ad-arsenal.gh0ulh4x.workers.com)
 
 No install needed — the live site is always up to date with `main`.
 
